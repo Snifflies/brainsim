@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Neural Atlas - Optimized</title>
+    <title>Brain Atlas - Precision Fit</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -69,8 +69,8 @@
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
     // --- CONFIGURATION ---
-    const STATIC_COUNT = 100000; // Reduced slightly for safety, still very dense
-    const ACTIVE_COUNT = 2500;
+    const STATIC_COUNT = 150000; // Very Dense Structure
+    const ACTIVE_COUNT = 3500;   // Active Signals
     
     const REGIONS = {
         "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "cingulate"],
@@ -102,9 +102,12 @@
 
     // Lighting
     scene.add(new THREE.AmbientLight(0x404040, 2.0));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    dirLight.position.set(10, 10, 10);
-    scene.add(dirLight);
+    
+    const headLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    headLight.position.set(0,0,1);
+    camera.add(headLight);
+    scene.add(camera);
+
     const backLight = new THREE.DirectionalLight(0x4444ff, 1.0);
     backLight.position.set(-10, 5, -10);
     scene.add(backLight);
@@ -127,17 +130,16 @@
     const MAT_SOLID_ACTIVE = new THREE.MeshLambertMaterial({ color: 0x151515, emissive: 0x110022 });
     
     const MAT_STATIC = new THREE.PointsMaterial({
-        size: 0.025, color: 0x334455, sizeAttenuation: true
+        size: 0.03, color: 0x334455, sizeAttenuation: true
     });
 
     const MAT_ACTIVE = new THREE.PointsMaterial({
-        size: 0.06, vertexColors: true, transparent: true, opacity: 1.0,
+        size: 0.05, vertexColors: true, transparent: true, opacity: 1.0,
         depthWrite: false, blending: THREE.NormalBlending
     });
 
     // --- CHUNKED BUILDER ---
     async function buildBrainAsync(brainGroup) {
-        // 1. SETUP MESH LIST
         let meshList = [];
         let totalArea = 0;
 
@@ -147,11 +149,10 @@
                 c.userData.originalName = (c.name || "").toLowerCase();
                 solidMeshes.push(c);
                 
-                // Fast Area Estimation (Sphere volume) - Prevents math freeze
                 if(!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
                 const rad = c.geometry.boundingSphere.radius;
                 const s = c.scale.x;
-                const area = (rad * s) * (rad * s); // rough surface area approx
+                const area = (rad * s) * (rad * s); 
                 
                 totalArea += area;
                 meshList.push({ mesh: c, area: area, name: c.userData.originalName });
@@ -160,7 +161,6 @@
         
         rootGroup.add(brainGroup);
         
-        // Sort largest first for better distribution
         meshList.sort((a,b) => b.area - a.area);
 
         // Setup Buffers
@@ -168,21 +168,20 @@
         const aPos = new Float32Array(ACTIVE_COUNT * 3);
         const aCol = new Float32Array(ACTIVE_COUNT * 3);
         
-        // Process Variables
         let sIndex = 0, aIndex = 0;
         const tempPos = new THREE.Vector3();
         const tempNorm = new THREE.Vector3();
-        const CHUNK_SIZE = 50; // Process 50 meshes per frame
+        const CHUNK_SIZE = 50; 
 
         statusText.innerText = "GENERATING NODES";
 
-        // --- ASYNC GENERATION LOOP ---
+        // --- ASYNC GENERATION ---
         for (let i = 0; i < meshList.length; i++) {
             const item = meshList[i];
             const ratio = item.area / totalArea;
             
             let sCount = Math.ceil(ratio * STATIC_COUNT);
-            if(sCount < 10) sCount = 10;
+            if(sCount < 5) sCount = 5; // Minimum
             
             let aCount = Math.ceil(ratio * ACTIVE_COUNT);
             if(aCount < 1) aCount = 1;
@@ -195,30 +194,41 @@
                 if (k.some(w => item.name.includes(w))) { regionID = r; break; }
             }
 
-            // Generate Static
+            // Generate Static Structure
             for(let k=0; k<sCount && sIndex < STATIC_COUNT; k++) {
                 sampler.sample(tempPos, tempNorm);
-                tempPos.addScaledVector(tempNorm, 0.005);
+                
+                // FIX: NEAR ZERO OFFSET. 
+                // Since the model is microscopic (0.17), offset must be microscopic (0.0005)
+                tempPos.addScaledVector(tempNorm, 0.0005); 
+                
+                // Apply local mesh transform
                 tempPos.applyMatrix4(item.mesh.matrix); 
+                
                 sPos[sIndex*3] = tempPos.x;
                 sPos[sIndex*3+1] = tempPos.y;
                 sPos[sIndex*3+2] = tempPos.z;
                 sIndex++;
             }
 
-            // Generate Active
+            // Generate Active Signals
             for(let k=0; k<aCount && aIndex < ACTIVE_COUNT; k++) {
                 sampler.sample(tempPos, tempNorm);
-                tempPos.addScaledVector(tempNorm, 0.02); 
+                // Slightly higher for visibility, but still microscopic relative to model scale
+                tempPos.addScaledVector(tempNorm, 0.002); 
                 tempPos.applyMatrix4(item.mesh.matrix); 
+                
                 aPos[aIndex*3] = tempPos.x;
                 aPos[aIndex*3+1] = tempPos.y;
                 aPos[aIndex*3+2] = tempPos.z;
+                
+                // Initial dark color
+                aCol[aIndex*3] = 0.1; aCol[aIndex*3+1] = 0.1; aCol[aIndex*3+2] = 0.3;
+
                 activeData[aIndex] = { region: regionID, v: -65-Math.random()*20, u: 0 };
                 aIndex++;
             }
 
-            // Yield to main thread every CHUNK_SIZE meshes
             if (i % CHUNK_SIZE === 0) {
                 const progress = Math.round((i / meshList.length) * 100);
                 progressBar.style.width = `${progress}%`;
@@ -256,8 +266,8 @@
             const isWhole = !currentActiveRegion;
 
             let threshold = 0.99;
-            if(isTarget) threshold = 0.96; 
-            if(!isWhole && !isTarget) threshold = 0.9995;
+            if(isTarget) threshold = 0.95; 
+            if(!isWhole && !isTarget) threshold = 0.9999;
 
             const input = (Math.random() > threshold) ? 20 : 0;
             p.v += (0.04 * p.v * p.v + 5 * p.v + 140 - p.u + input) * dt;
@@ -268,7 +278,8 @@
                 colors[i*3] = 0.7; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0; // Spike
             } else {
                 let r=0, g=0, b=0;
-                if(isTarget || isWhole) { r=0; g=0.1; b=0.3; } // Base Blue
+                if(isTarget) { r=0.5; g=0.0; b=0.8; } // Active: Purple Base
+                else if (isWhole) { r=0; g=0.1; b=0.3; } // Base Blue
                 
                 colors[i*3] += (r - colors[i*3]) * 0.15;
                 colors[i*3+1] += (g - colors[i*3+1]) * 0.15;

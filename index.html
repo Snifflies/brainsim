@@ -2,39 +2,746 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!-- Crucial for mobile to prevent unwanted zooming/panning of the page -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Viewer - Rescue Mode</title>
+    <title>Brain Atlas 3D</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
-        canvas { display: block; width: 100%; height: 100%; }
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: sans-serif; }
+        canvas { display: block; width: 100%; height: 100%; outline: none; }
 
-        /* INFO OVERLAY */
-        #info-screen {
-            position: fixed; top: 0; left: 0; width: 100%;
-            padding: 20px; box-sizing: border-box;
-            pointer-events: none; /* Click through */
-            z-index: 100;
-        }
-        #status-text { color: #00ff88; font-size: 1rem; background: rgba(0,0,0,0.7); padding: 5px; display: inline-block; }
-        #error-text { color: #ff4444; font-size: 0.9rem; margin-top: 5px; background: rgba(0,0,0,0.8); display: none; padding: 5px; }
-
-        /* UI DROPDOWN */
+        /* UI CONTAINER */
         #ui-container {
-            position: fixed; bottom: 30px; left: 0; width: 100%;
-            display: flex; justify-content: center; pointer-events: auto;
-            z-index: 101;
+            position: absolute; bottom: 30px; left: 0; width: 100%;
+            display: flex; justify-content: center;
+            pointer-events: none; /* Allows touching the 3D scene behind the empty areas */
+            z-index: 10;
         }
+
+        /* THE DROPDOWN */
+        .control-box {
+            background: rgba(20, 20, 20, 0.8);
+            backdrop-filter: blur(10px);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid #333;
+            width: 90%; max-width: 350px;
+            pointer-events: auto; /* Re-enable touches for the box */
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+
+        label {
+            color: #aaa; font-size: 0.75rem; font-weight: bold; letter-spacing: 1px;
+            margin-bottom: 8px; display: block; text-transform: uppercase;
+        }
+
         select {
-            width: 90%; max-width: 300px; padding: 12px; font-size: 16px;
-            background: #222; color: white; border: 1px solid #555; border-radius: 6px;
+            width: 100%; padding: 12px; font-size: 16px;
+            background: #111; color: white;
+            border: 1px solid #444; border-radius: 6px;
+            outline: none; appearance: none; /* Remove default arrow */
+            background-image: url('data:image/svg+xml;utf8,<svg fill="white" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+            background-repeat: no-repeat; background-position: right 10px center;
         }
+
+        /* LOADING SCREEN */
+        #loading-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: #000; z-index: 999;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            transition: opacity 0.5s ease;
+        }
+        .spinner {
+            width: 40px; height: 40px; border: 4px solid #333;
+            border-top: 4px solid #ff0055; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 15px;
+        }
+        .loading-text { color: #fff; font-family: monospace; letter-spacing: 2px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-<div id="info-screen">
-    <div id="status-text">Initializing...</div>
-    <div id="error-text"></div>
+<div id="loading-screen">
+    <div class="spinner"></div>
+    <div class="loading-text">LOADING MODEL</div>
+</div>
+
+<div id="ui-container">
+    <div class="control-box">
+        <label for="region-select">Highlight Region</label>
+        <select id="region-select">
+            <option value="">Whole Brain (Reset)</option>
+        </select>
+    </div>
+</div>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // --- 1. CONFIGURATION ---
+    
+    // Materials
+    const MAT_BASE = new THREE.MeshStandardMaterial({ 
+        color: 0xe0e0e0, 
+        roughness: 0.5, 
+        metalness: 0.1 
+    });
+    
+    const MAT_ACTIVE = new THREE.MeshStandardMaterial({ 
+        color: 0xff0055, 
+        roughness: 0.4, 
+        emissive: 0x440022, // Slight glow
+        emissiveIntensity: 0.5
+    });
+    
+    const MAT_GHOST = new THREE.MeshStandardMaterial({ 
+        color: 0x202020, 
+        transparent: true, 
+        opacity: 0.15, 
+        depthWrite: false // Allows seeing through it
+    });
+
+    // Regions Mapping
+    const REGIONS = {
+        "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "anterior_cingulate"],
+        "Parietal Lobe":     ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
+        "Temporal Lobe":     ["temporal", "fusiform", "amygdaloid", "hippocampus", "uncus"],
+        "Occipital Lobe":    ["occipital", "cuneus", "lingual"],
+        "Cerebellum":        ["cerebellar", "vermis"],
+        "Brain Stem":        ["medulla", "pons", "midbrain", "colliculus", "peduncle", "olive"],
+        "Thalamus":          ["thalamus", "geniculate", "habenular", "pineal"],
+        "Basal Ganglia":     ["caudate", "putamen", "pallidus", "accumbens", "substantia", "nigra"],
+        "Ventricles":        ["ventricle", "aqueduct"]
+    };
+
+    // --- 2. SCENE SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x080808); // Very dark grey
+
+    // Camera: 50 FOV is good for objects, less distortion than 75
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 5, 25); // Initial view
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap pixel ratio for performance
+    document.body.appendChild(renderer.domElement);
+
+    // --- 3. CONTROLS ---
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; // Smooth feeling
+    controls.dampingFactor = 0.05;
+    
+    // IMPORTANT: Prevent model from leaving the screen
+    controls.enablePan = false; 
+    
+    // Zoom Limits
+    controls.minDistance = 8;  // Don't get too close
+    controls.maxDistance = 40; // Don't go too far
+
+    // Auto Rotation
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.0;
+
+    // --- 4. LIGHTING ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    // Key Light
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // Rim Light (Backlight for aesthetics)
+    const backLight = new THREE.DirectionalLight(0x4444ff, 1.0);
+    backLight.position.set(-10, 5, -20);
+    scene.add(backLight);
+
+    // --- 5. MODEL MANAGER ---
+    let allParts = [];
+
+    // Function to swap materials based on selection
+    function updateHighlight(regionName) {
+        if (!regionName) {
+            // Reset to Base
+            allParts.forEach(p => p.material = MAT_BASE);
+            return;
+        }
+
+        const keywords = REGIONS[regionName];
+        
+        allParts.forEach(part => {
+            const name = part.userData.originalName;
+            // Check if this part matches the selected region
+            const isMatch = keywords.some(k => name.includes(k));
+
+            if (isMatch) {
+                part.material = MAT_ACTIVE;
+            } else {
+                part.material = MAT_GHOST;
+            }
+        });
+    }
+
+    // --- 6. LOADING ---
+    const loader = new GLTFLoader();
+    const loadingScreen = document.getElementById('loading-screen');
+
+    // Load the file (using cache buster to be safe)
+    loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
+        
+        const brain = gltf.scene;
+        
+        // A. Process all meshes immediately
+        brain.traverse((child) => {
+            if (child.isMesh) {
+                // Dispose of heavy original materials to save memory
+                if (child.material) child.material.dispose();
+                
+                // Apply clean base material
+                child.material = MAT_BASE;
+                
+                // Store name for searching later
+                child.userData.originalName = (child.name || "").toLowerCase();
+                allParts.push(child);
+            }
+        });
+
+        // B. Center and Scale Calculation (The "Rescue" Logic)
+        const box = new THREE.Box3().setFromObject(brain);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+
+        // Center it
+        brain.position.sub(center);
+
+        // Scale it up (Target size 10 units)
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+            const scaleFactor = 10 / maxDim;
+            brain.scale.setScalar(scaleFactor);
+        }
+
+        scene.add(brain);
+
+        // Fade out loader
+        loadingScreen.style.opacity = 0;
+        setTimeout(() => loadingScreen.style.display = 'none', 500);
+
+    }, undefined, (err) => {
+        console.error(err);
+        document.querySelector('.loading-text').innerText = "ERROR LOADING";
+        alert("Could not load model.");
+    });
+
+    // --- 7. UI LOGIC ---
+    const selectEl = document.getElementById('region-select');
+    
+    // Populate Dropdown
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.innerText = key;
+        selectEl.appendChild(opt);
+    });
+
+    // Handle Change
+    selectEl.addEventListener('change', (e) => {
+        updateHighlight(e.target.value);
+    });
+
+    // Stop auto-rotate when user interacts
+    controls.addEventListener('start', () => { controls.autoRotate = false; });
+
+    // --- 8. RENDER LOOP ---
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+</script>
+</body>
+</html>            width: 40px; height: 40px; border: 4px solid #333;
+            border-top: 4px solid #ff0055; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 15px;
+        }
+        .loading-text { color: #fff; font-family: monospace; letter-spacing: 2px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="loading-screen">
+    <div class="spinner"></div>
+    <div class="loading-text">LOADING MODEL</div>
+</div>
+
+<div id="ui-container">
+    <div class="control-box">
+        <label for="region-select">Highlight Region</label>
+        <select id="region-select">
+            <option value="">Whole Brain (Reset)</option>
+        </select>
+    </div>
+</div>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // --- 1. CONFIGURATION ---
+    
+    // Materials
+    const MAT_BASE = new THREE.MeshStandardMaterial({ 
+        color: 0xe0e0e0, 
+        roughness: 0.5, 
+        metalness: 0.1 
+    });
+    
+    const MAT_ACTIVE = new THREE.MeshStandardMaterial({ 
+        color: 0xff0055, 
+        roughness: 0.4, 
+        emissive: 0x440022, // Slight glow
+        emissiveIntensity: 0.5
+    });
+    
+    const MAT_GHOST = new THREE.MeshStandardMaterial({ 
+        color: 0x202020, 
+        transparent: true, 
+        opacity: 0.15, 
+        depthWrite: false // Allows seeing through it
+    });
+
+    // Regions Mapping
+    const REGIONS = {
+        "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "anterior_cingulate"],
+        "Parietal Lobe":     ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
+        "Temporal Lobe":     ["temporal", "fusiform", "amygdaloid", "hippocampus", "uncus"],
+        "Occipital Lobe":    ["occipital", "cuneus", "lingual"],
+        "Cerebellum":        ["cerebellar", "vermis"],
+        "Brain Stem":        ["medulla", "pons", "midbrain", "colliculus", "peduncle", "olive"],
+        "Thalamus":          ["thalamus", "geniculate", "habenular", "pineal"],
+        "Basal Ganglia":     ["caudate", "putamen", "pallidus", "accumbens", "substantia", "nigra"],
+        "Ventricles":        ["ventricle", "aqueduct"]
+    };
+
+    // --- 2. SCENE SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x080808); // Very dark grey
+
+    // Camera: 50 FOV is good for objects, less distortion than 75
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 5, 25); // Initial view
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap pixel ratio for performance
+    document.body.appendChild(renderer.domElement);
+
+    // --- 3. CONTROLS ---
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; // Smooth feeling
+    controls.dampingFactor = 0.05;
+    
+    // IMPORTANT: Prevent model from leaving the screen
+    controls.enablePan = false; 
+    
+    // Zoom Limits
+    controls.minDistance = 8;  // Don't get too close
+    controls.maxDistance = 40; // Don't go too far
+
+    // Auto Rotation
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.0;
+
+    // --- 4. LIGHTING ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    // Key Light
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // Rim Light (Backlight for aesthetics)
+    const backLight = new THREE.DirectionalLight(0x4444ff, 1.0);
+    backLight.position.set(-10, 5, -20);
+    scene.add(backLight);
+
+    // --- 5. MODEL MANAGER ---
+    let allParts = [];
+
+    // Function to swap materials based on selection
+    function updateHighlight(regionName) {
+        if (!regionName) {
+            // Reset to Base
+            allParts.forEach(p => p.material = MAT_BASE);
+            return;
+        }
+
+        const keywords = REGIONS[regionName];
+        
+        allParts.forEach(part => {
+            const name = part.userData.originalName;
+            // Check if this part matches the selected region
+            const isMatch = keywords.some(k => name.includes(k));
+
+            if (isMatch) {
+                part.material = MAT_ACTIVE;
+            } else {
+                part.material = MAT_GHOST;
+            }
+        });
+    }
+
+    // --- 6. LOADING ---
+    const loader = new GLTFLoader();
+    const loadingScreen = document.getElementById('loading-screen');
+
+    // Load the file (using cache buster to be safe)
+    loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
+        
+        const brain = gltf.scene;
+        
+        // A. Process all meshes immediately
+        brain.traverse((child) => {
+            if (child.isMesh) {
+                // Dispose of heavy original materials to save memory
+                if (child.material) child.material.dispose();
+                
+                // Apply clean base material
+                child.material = MAT_BASE;
+                
+                // Store name for searching later
+                child.userData.originalName = (child.name || "").toLowerCase();
+                allParts.push(child);
+            }
+        });
+
+        // B. Center and Scale Calculation (The "Rescue" Logic)
+        const box = new THREE.Box3().setFromObject(brain);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+
+        // Center it
+        brain.position.sub(center);
+
+        // Scale it up (Target size 10 units)
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+            const scaleFactor = 10 / maxDim;
+            brain.scale.setScalar(scaleFactor);
+        }
+
+        scene.add(brain);
+
+        // Fade out loader
+        loadingScreen.style.opacity = 0;
+        setTimeout(() => loadingScreen.style.display = 'none', 500);
+
+    }, undefined, (err) => {
+        console.error(err);
+        document.querySelector('.loading-text').innerText = "ERROR LOADING";
+        alert("Could not load model.");
+    });
+
+    // --- 7. UI LOGIC ---
+    const selectEl = document.getElementById('region-select');
+    
+    // Populate Dropdown
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.innerText = key;
+        selectEl.appendChild(opt);
+    });
+
+    // Handle Change
+    selectEl.addEventListener('change', (e) => {
+        updateHighlight(e.target.value);
+    });
+
+    // Stop auto-rotate when user interacts
+    controls.addEventListener('start', () => { controls.autoRotate = false; });
+
+    // --- 8. RENDER LOOP ---
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+</script>
+</body>
+</html>        .loading-text { color: #fff; font-family: monospace; letter-spacing: 2px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="loading-screen">
+    <div class="spinner"></div>
+    <div class="loading-text">LOADING MODEL</div>
+</div>
+
+<div id="ui-container">
+    <div class="control-box">
+        <label for="region-select">Highlight Region</label>
+        <select id="region-select">
+            <option value="">Whole Brain (Reset)</option>
+        </select>
+    </div>
+</div>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // --- 1. CONFIGURATION ---
+    
+    // Materials
+    const MAT_BASE = new THREE.MeshStandardMaterial({ 
+        color: 0xe0e0e0, 
+        roughness: 0.5, 
+        metalness: 0.1 
+    });
+    
+    const MAT_ACTIVE = new THREE.MeshStandardMaterial({ 
+        color: 0xff0055, 
+        roughness: 0.4, 
+        emissive: 0x440022, // Slight glow
+        emissiveIntensity: 0.5
+    });
+    
+    const MAT_GHOST = new THREE.MeshStandardMaterial({ 
+        color: 0x202020, 
+        transparent: true, 
+        opacity: 0.15, 
+        depthWrite: false // Allows seeing through it
+    });
+
+    // Regions Mapping
+    const REGIONS = {
+        "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "anterior_cingulate"],
+        "Parietal Lobe":     ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
+        "Temporal Lobe":     ["temporal", "fusiform", "amygdaloid", "hippocampus", "uncus"],
+        "Occipital Lobe":    ["occipital", "cuneus", "lingual"],
+        "Cerebellum":        ["cerebellar", "vermis"],
+        "Brain Stem":        ["medulla", "pons", "midbrain", "colliculus", "peduncle", "olive"],
+        "Thalamus":          ["thalamus", "geniculate", "habenular", "pineal"],
+        "Basal Ganglia":     ["caudate", "putamen", "pallidus", "accumbens", "substantia", "nigra"],
+        "Ventricles":        ["ventricle", "aqueduct"]
+    };
+
+    // --- 2. SCENE SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x080808); // Very dark grey
+
+    // Camera: 50 FOV is good for objects, less distortion than 75
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 5, 25); // Initial view
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap pixel ratio for performance
+    document.body.appendChild(renderer.domElement);
+
+    // --- 3. CONTROLS ---
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; // Smooth feeling
+    controls.dampingFactor = 0.05;
+    
+    // IMPORTANT: Prevent model from leaving the screen
+    controls.enablePan = false; 
+    
+    // Zoom Limits
+    controls.minDistance = 8;  // Don't get too close
+    controls.maxDistance = 40; // Don't go too far
+
+    // Auto Rotation
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.0;
+
+    // --- 4. LIGHTING ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    // Key Light
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // Rim Light (Backlight for aesthetics)
+    const backLight = new THREE.DirectionalLight(0x4444ff, 1.0);
+    backLight.position.set(-10, 5, -20);
+    scene.add(backLight);
+
+    // --- 5. MODEL MANAGER ---
+    let allParts = [];
+
+    // Function to swap materials based on selection
+    function updateHighlight(regionName) {
+        if (!regionName) {
+            // Reset to Base
+            allParts.forEach(p => p.material = MAT_BASE);
+            return;
+        }
+
+        const keywords = REGIONS[regionName];
+        
+        allParts.forEach(part => {
+            const name = part.userData.originalName;
+            // Check if this part matches the selected region
+            const isMatch = keywords.some(k => name.includes(k));
+
+            if (isMatch) {
+                part.material = MAT_ACTIVE;
+            } else {
+                part.material = MAT_GHOST;
+            }
+        });
+    }
+
+    // --- 6. LOADING ---
+    const loader = new GLTFLoader();
+    const loadingScreen = document.getElementById('loading-screen');
+
+    // Load the file (using cache buster to be safe)
+    loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
+        
+        const brain = gltf.scene;
+        
+        // A. Process all meshes immediately
+        brain.traverse((child) => {
+            if (child.isMesh) {
+                // Dispose of heavy original materials to save memory
+                if (child.material) child.material.dispose();
+                
+                // Apply clean base material
+                child.material = MAT_BASE;
+                
+                // Store name for searching later
+                child.userData.originalName = (child.name || "").toLowerCase();
+                allParts.push(child);
+            }
+        });
+
+        // B. Center and Scale Calculation (The "Rescue" Logic)
+        const box = new THREE.Box3().setFromObject(brain);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+
+        // Center it
+        brain.position.sub(center);
+
+        // Scale it up (Target size 10 units)
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+            const scaleFactor = 10 / maxDim;
+            brain.scale.setScalar(scaleFactor);
+        }
+
+        scene.add(brain);
+
+        // Fade out loader
+        loadingScreen.style.opacity = 0;
+        setTimeout(() => loadingScreen.style.display = 'none', 500);
+
+    }, undefined, (err) => {
+        console.error(err);
+        document.querySelector('.loading-text').innerText = "ERROR LOADING";
+        alert("Could not load model.");
+    });
+
+    // --- 7. UI LOGIC ---
+    const selectEl = document.getElementById('region-select');
+    
+    // Populate Dropdown
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.innerText = key;
+        selectEl.appendChild(opt);
+    });
+
+    // Handle Change
+    selectEl.addEventListener('change', (e) => {
+        updateHighlight(e.target.value);
+    });
+
+    // Stop auto-rotate when user interacts
+    controls.addEventListener('start', () => { controls.autoRotate = false; });
+
+    // --- 8. RENDER LOOP ---
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+</script>
+</body>
+</html>    <div id="error-text"></div>
 </div>
 
 <div id="ui-container">

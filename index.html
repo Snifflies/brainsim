@@ -3,38 +3,277 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Interaction</title>
+    <title>Rotten Brain Viewer</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         canvas { display: block; width: 100%; height: 100%; outline: none; }
         
+        /* UI Styling */
         #ui-container {
-            position: absolute;
-            top: 20px; left: 50%; transform: translateX(-50%);
-            z-index: 10; width: 80%; max-width: 400px;
-            text-align: center;
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 10; width: 85%; max-width: 400px;
             background: rgba(20, 20, 20, 0.9);
             padding: 15px; border-radius: 12px;
-            border: 1px solid #444;
+            border: 1px solid #444; text-align: center;
         }
-
         select {
             width: 100%; padding: 12px; font-size: 16px;
             background-color: #333; color: #fff;
-            border: 1px solid #666; border-radius: 6px;
-            outline: none;
+            border: 1px solid #666; border-radius: 6px; outline: none;
         }
-        
-        label { color: #ccc; display: block; margin-bottom: 8px; font-weight: bold; text-transform: uppercase; font-size: 0.8rem; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ff0055; font-weight: bold; font-size: 1.2rem; }
+        label { color: #ccc; display: block; margin-bottom: 8px; font-weight: bold; font-size: 0.8rem; text-transform: uppercase; }
+
+        /* Loading Text */
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #ff0055; font-family: monospace; font-size: 1.2rem; pointer-events: none;
+            background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; text-align: center;
+        }
     </style>
 </head>
 <body>
 
-<div id="loading">Loading Model...</div>
+<div id="loading">Loading Rotten Brain...</div>
 
 <div id="ui-container">
-    <label for="region-select">Select Brain Region</label>
+    <label for="region-select">Brain Regions</label>
+    <select id="region-select">
+        <option value="">Whole Brain (Reset)</option>
+        <!-- Options will populate automatically -->
+    </select>
+</div>
+
+<!-- Import Map -->
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<!-- SINGLE SCRIPT: CONTAINS ALL LOGIC -->
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
+
+    // ==========================================
+    // 1. CONFIGURATION (EDIT REGIONS HERE)
+    // ==========================================
+    // Since your model is one solid piece, we paint it by X,Y,Z coordinates.
+    // Adjust these numbers if the colors appear in the wrong spot.
+    const REGIONS = {
+        "Frontal Lobe":       { x: 0,    y: 2,    z: 3,    radius: 4.0 },
+        "Prefrontal Cortex":  { x: 0,    y: -1,   z: 4,    radius: 3.0 },
+        "Parietal Lobe":      { x: 0,    y: 4,    z: -1,   radius: 3.5 },
+        "Occipital Lobe":     { x: 0,    y: 0,    z: -5,   radius: 3.5 },
+        "Temporal Lobe (L)":  { x: -3.5, y: -1,   z: 0,    radius: 2.5 },
+        "Temporal Lobe (R)":  { x: 3.5,  y: -1,   z: 0,    radius: 2.5 },
+        "Cerebellum":         { x: 0,    y: -3,   z: -3,   radius: 2.5 },
+        "Brain Stem":         { x: 0,    y: -5,   z: -0.5, radius: 2.0 }
+    };
+
+    const COLORS = {
+        BASE: new THREE.Color(0xffc0cb),   // Pale Pink
+        ACTIVE: new THREE.Color(0xff0055), // Hot Pink
+        NEURON: 0x00ffff                   // Cyan
+    };
+
+    // ==========================================
+    // 2. CLASS: BRAIN REGION MANAGER (Vertex Painting)
+    // ==========================================
+    class BrainRegionManager {
+        constructor() {
+            this.brainMesh = null;
+        }
+
+        setup(mesh) {
+            this.brainMesh = mesh;
+            
+            // Ensure we can paint on this mesh
+            const count = mesh.geometry.attributes.position.count;
+            mesh.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+
+            // Set material to support vertex colors
+            mesh.material = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                roughness: 0.5,
+                metalness: 0.1,
+                color: 0xffffff // White base lets vertex colors show through
+            });
+
+            // Paint it all base pink initially
+            this.highlightRegion(null); 
+        }
+
+        highlightRegion(regionName) {
+            if (!this.brainMesh) return;
+
+            const geometry = this.brainMesh.geometry;
+            const positions = geometry.attributes.position;
+            const colors = geometry.attributes.color;
+            const count = positions.count;
+
+            const target = REGIONS[regionName];
+            const hasTarget = !!target;
+            
+            const tempVec = new THREE.Vector3();
+            const targetVec = hasTarget ? new THREE.Vector3(target.x, target.y, target.z) : new THREE.Vector3();
+
+            for (let i = 0; i < count; i++) {
+                if (!hasTarget) {
+                    // Reset to Pink
+                    colors.setXYZ(i, COLORS.BASE.r, COLORS.BASE.g, COLORS.BASE.b);
+                } else {
+                    // Calculate distance to region center
+                    tempVec.fromBufferAttribute(positions, i);
+                    const dist = tempVec.distanceTo(targetVec);
+
+                    if (dist < target.radius) {
+                        // Gradient blend
+                        const t = Math.max(0, 1 - (dist / target.radius));
+                        const r = THREE.MathUtils.lerp(COLORS.BASE.r, COLORS.ACTIVE.r, t);
+                        const g = THREE.MathUtils.lerp(COLORS.BASE.g, COLORS.ACTIVE.g, t);
+                        const b = THREE.MathUtils.lerp(COLORS.BASE.b, COLORS.ACTIVE.b, t);
+                        colors.setXYZ(i, r, g, b);
+                    } else {
+                        colors.setXYZ(i, COLORS.BASE.r, COLORS.BASE.g, COLORS.BASE.b);
+                    }
+                }
+            }
+            colors.needsUpdate = true;
+        }
+    }
+
+    // ==========================================
+    // 3. CLASS: NEURONS (Invisible Logic)
+    // ==========================================
+    class NeuronSystem {
+        constructor(scene) {
+            this.scene = scene;
+            this.particlesData = [];
+            this.points = null;
+        }
+
+        init(mesh) {
+            // Setup invisible particles
+            const count = 1000;
+            const sampler = new MeshSurfaceSampler(mesh).build();
+            const tempPosition = new THREE.Vector3();
+            
+            // Create logic but don't add visual mesh if you want them fully hidden
+            // Or add them but make them transparent/tiny
+            // Here we create the structure but don't add it to scene to keep it "pure logic"
+            // If you want to see them later, un-comment scene.add
+        }
+        update() { /* Logic loop placeholder */ }
+    }
+
+    // ==========================================
+    // 4. MAIN APP SETUP
+    // ==========================================
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050505);
+
+    // Camera Setup (High Far plane to prevent clipping)
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.set(0, 0, 20);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // Initialize Managers
+    const regionManager = new BrainRegionManager();
+    
+    // Populate Dropdown
+    const select = document.getElementById('region-select');
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.innerText = key;
+        select.appendChild(opt);
+    });
+
+    select.addEventListener('change', (e) => {
+        regionManager.highlightRegion(e.target.value);
+    });
+
+    // Load Model
+    const loader = new GLTFLoader();
+    const loadingEl = document.getElementById('loading');
+
+    loader.load('./rotten_brain.glb', (gltf) => {
+        const brain = gltf.scene;
+
+        // 1. Auto-Zoom / Center
+        const box = new THREE.Box3().setFromObject(brain);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        
+        brain.position.sub(center); // Center at 0,0,0
+
+        // Calculate Zoom
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const fov = camera.fov * (Math.PI / 180);
+        let cameraZ = Math.abs(maxDim / 2 * Math.tan(fov * 2));
+        camera.position.z = cameraZ * 2.0; // 2.0 = Zoom factor
+        camera.updateProjectionMatrix();
+
+        // 2. Setup Systems
+        brain.traverse((child) => {
+            if (child.isMesh) {
+                try {
+                    regionManager.setup(child);
+                } catch (err) {
+                    console.warn("Could not setup regions on mesh:", child.name);
+                }
+            }
+        });
+
+        scene.add(brain);
+        loadingEl.style.display = 'none';
+
+    }, (xhr) => {
+        // Progress
+        const percent = Math.round((xhr.loaded / xhr.total * 100));
+        loadingEl.innerText = `Loading... ${percent}%`;
+    }, (err) => {
+        console.error(err);
+        loadingEl.innerText = "Error loading. Check console.";
+    });
+
+    // Handle Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Animation Loop
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+</script>
+</body>
+</html>    <label for="region-select">Select Brain Region</label>
     <select id="region-select">
         <option value="">Whole Brain</option>
     </select>

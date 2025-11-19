@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Atlas - High Perf</title>
+    <title>Neural Atlas - Optimized</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #050505; font-family: monospace; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
+        /* UI LAYOUT */
         #loading-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background-color: #000; z-index: 999;
@@ -15,32 +16,36 @@
             justify-content: center; align-items: center;
             transition: opacity 0.5s ease;
         }
-        .spinner {
-            width: 50px; height: 50px; border: 4px solid #222;
-            border-top: 4px solid #0088ff; border-radius: 50%;
-            animation: spin 1s linear infinite; margin-bottom: 20px;
+        
+        /* PROGRESS BAR */
+        .progress-container {
+            width: 200px; height: 4px; background: #333; margin-top: 15px;
+            border-radius: 2px; overflow: hidden;
         }
-        #status-text { color: #0088ff; font-size: 1.2rem; letter-spacing: 2px; }
+        #progress-bar {
+            width: 0%; height: 100%; background: #00d8ff; transition: width 0.1s;
+        }
+        
+        #status-text { color: #00d8ff; font-size: 1.1rem; letter-spacing: 2px; margin-bottom: 5px;}
+        #sub-status { color: #666; font-size: 0.8rem; }
         
         #ui-container {
             position: absolute; bottom: 40px; left: 0; width: 100%;
             display: flex; justify-content: center; pointer-events: none; z-index: 10;
         }
         select {
-            pointer-events: auto; padding: 12px 20px; background: rgba(20,20,20,1.0);
-            color: #0088ff; border: 1px solid #004477; border-radius: 8px; font-size: 18px;
-            text-transform: uppercase; font-weight: bold;
-            box-shadow: 0 0 15px rgba(0, 136, 255, 0.3);
+            pointer-events: auto; padding: 12px 20px; background: rgba(15,20,25,0.95);
+            color: #00d8ff; border: 1px solid #004477; border-radius: 8px; font-size: 16px;
+            text-transform: uppercase; font-weight: bold; outline: none;
         }
-
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
 <div id="loading-screen">
-    <div class="spinner"></div>
-    <div id="status-text">SYSTEM INIT...</div>
+    <div id="status-text">SYSTEM START</div>
+    <div class="progress-container"><div id="progress-bar"></div></div>
+    <div id="sub-status">Initializing...</div>
 </div>
 
 <div id="ui-container">
@@ -63,12 +68,10 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
-    // --- CONFIG ---
-    const STATIC_COUNT = 70000; // Structure dots (Cost: Low)
-    const ACTIVE_COUNT = 2500;  // Firing dots (Cost: Med)
-    const STATIC_SIZE = 0.025;
-    const ACTIVE_SIZE = 0.06;
-
+    // --- CONFIGURATION ---
+    const STATIC_COUNT = 100000; // Reduced slightly for safety, still very dense
+    const ACTIVE_COUNT = 2500;
+    
     const REGIONS = {
         "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "cingulate"],
         "Parietal Lobe":     ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
@@ -82,12 +85,10 @@
 
     // --- SCENE ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
-    // Fog hides the clipping at the back
-    scene.fog = new THREE.Fog(0x000000, 15, 25); 
+    scene.background = new THREE.Color(0x020203);
 
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 18); 
+    camera.position.set(0, 2, 18);
 
     const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -96,195 +97,179 @@
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false; 
-    controls.minDistance = 5; controls.maxDistance = 50;
-    controls.autoRotate = true; controls.autoRotateSpeed = 0.6;
+    controls.minDistance = 3; controls.maxDistance = 50;
+    controls.autoRotate = true; controls.autoRotateSpeed = 0.5;
 
-    // --- LIGHTING ---
-    // Bright directional lights to define the solid shape
+    // Lighting
+    scene.add(new THREE.AmbientLight(0x404040, 2.0));
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(10, 10, 10);
     scene.add(dirLight);
-    
     const backLight = new THREE.DirectionalLight(0x4444ff, 1.0);
     backLight.position.set(-10, 5, -10);
     scene.add(backLight);
-    
-    scene.add(new THREE.AmbientLight(0x404040, 2.0)); // Bright ambient
 
-    // --- STATE ---
+    // --- GLOBALS ---
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
     
-    let staticCloud = null;
-    let activeCloud = null;
-    
-    // Arrays for the simulation loop
-    let activeData = []; // { v, u, region }
-    let solidMeshes = []; // Refs to the mesh pieces
-    let currentActiveRegion = null;
+    let staticCloud = null, activeCloud = null;
+    let activeData = [], solidMeshes = [], currentActiveRegion = null;
+
+    // UI Refs
+    const statusText = document.getElementById('status-text');
+    const subStatus = document.getElementById('sub-status');
+    const loadingScreen = document.getElementById('loading-screen');
+    const progressBar = document.getElementById('progress-bar');
 
     // --- MATERIALS ---
-    // 1. The Solid Core (Blocks view of back-side, prevents color mixing)
-    const MAT_SOLID = new THREE.MeshLambertMaterial({ 
-        color: 0x080808, 
-        emissive: 0x000000 
-    });
-    const MAT_SOLID_ACTIVE = new THREE.MeshLambertMaterial({ 
-        color: 0x151515, 
-        emissive: 0x110022 
-    });
-
-    // 2. Static Structure (Grey Dust)
+    const MAT_SOLID = new THREE.MeshLambertMaterial({ color: 0x080808, emissive: 0x000000 });
+    const MAT_SOLID_ACTIVE = new THREE.MeshLambertMaterial({ color: 0x151515, emissive: 0x110022 });
+    
     const MAT_STATIC = new THREE.PointsMaterial({
-        size: STATIC_SIZE, color: 0x334455,
-        sizeAttenuation: true, transparent: false
+        size: 0.025, color: 0x334455, sizeAttenuation: true
     });
 
-    // 3. Active Signals (Big Bright Dots)
     const MAT_ACTIVE = new THREE.PointsMaterial({
-        size: ACTIVE_SIZE, vertexColors: true,
-        transparent: true, opacity: 1.0,
-        depthWrite: false, 
-        blending: THREE.NormalBlending // Prevents flashbang effect
+        size: 0.06, vertexColors: true, transparent: true, opacity: 1.0,
+        depthWrite: false, blending: THREE.NormalBlending
     });
 
-
-    // --- BUILDER ---
-    function buildBrain(brainGroup) {
-        
-        // A. SETUP SOLID MESH
+    // --- CHUNKED BUILDER ---
+    async function buildBrainAsync(brainGroup) {
+        // 1. SETUP MESH LIST
         let meshList = [];
         let totalArea = 0;
 
         brainGroup.traverse(c => {
             if(c.isMesh) {
-                // Make it solid black/grey
-                c.material = MAT_SOLID; 
+                c.material = MAT_SOLID;
                 c.userData.originalName = (c.name || "").toLowerCase();
                 solidMeshes.push(c);
-
-                // Area Calc
-                c.updateMatrixWorld();
-                const sphere = c.geometry.boundingSphere || c.geometry.computeBoundingSphere();
-                // Estimate area by volume/radius to save loading time
+                
+                // Fast Area Estimation (Sphere volume) - Prevents math freeze
+                if(!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
+                const rad = c.geometry.boundingSphere.radius;
                 const s = c.scale.x;
-                const area = sphere.radius * s * sphere.radius * s;
+                const area = (rad * s) * (rad * s); // rough surface area approx
+                
                 totalArea += area;
                 meshList.push({ mesh: c, area: area, name: c.userData.originalName });
             }
         });
         
         rootGroup.add(brainGroup);
-
-        // B. GENERATE POINTS
+        
+        // Sort largest first for better distribution
         meshList.sort((a,b) => b.area - a.area);
 
-        // Arrays
+        // Setup Buffers
         const sPos = new Float32Array(STATIC_COUNT * 3);
         const aPos = new Float32Array(ACTIVE_COUNT * 3);
         const aCol = new Float32Array(ACTIVE_COUNT * 3);
         
-        let sIdx = 0;
-        let aIdx = 0;
+        // Process Variables
+        let sIndex = 0, aIndex = 0;
         const tempPos = new THREE.Vector3();
         const tempNorm = new THREE.Vector3();
+        const CHUNK_SIZE = 50; // Process 50 meshes per frame
 
-        for(let item of meshList) {
-            // Calculate Distribution
+        statusText.innerText = "GENERATING NODES";
+
+        // --- ASYNC GENERATION LOOP ---
+        for (let i = 0; i < meshList.length; i++) {
+            const item = meshList[i];
             const ratio = item.area / totalArea;
-            const sTarget = Math.ceil(ratio * STATIC_COUNT);
-            const aTarget = Math.ceil(ratio * ACTIVE_COUNT);
             
+            let sCount = Math.ceil(ratio * STATIC_COUNT);
+            if(sCount < 10) sCount = 10;
+            
+            let aCount = Math.ceil(ratio * ACTIVE_COUNT);
+            if(aCount < 1) aCount = 1;
+
             const sampler = new MeshSurfaceSampler(item.mesh).build();
             
-            // Region Detection
+            // Identify Region
             let regionID = null;
             for(const [r, k] of Object.entries(REGIONS)) {
                 if (k.some(w => item.name.includes(w))) { regionID = r; break; }
             }
 
-            // 1. Generate Static Structure (No Animation data needed)
-            for(let i=0; i<sTarget; i++) {
-                if (sIdx >= STATIC_COUNT) break;
+            // Generate Static
+            for(let k=0; k<sCount && sIndex < STATIC_COUNT; k++) {
                 sampler.sample(tempPos, tempNorm);
-                tempPos.addScaledVector(tempNorm, 0.005); // Push out slightly
-                tempPos.applyMatrix4(item.mesh.matrix); // Local transform relative to group
-                
-                sPos[sIdx*3] = tempPos.x;
-                sPos[sIdx*3+1] = tempPos.y;
+                tempPos.addScaledVector(tempNorm, 0.005);
+                tempPos.applyMatrix4(item.mesh.matrix); 
+                sPos[sIndex*3] = tempPos.x;
+                sPos[sIndex*3+1] = tempPos.y;
                 sPos[sIndex*3+2] = tempPos.z;
-                sIdx++;
+                sIndex++;
             }
 
-            // 2. Generate Active Agents (Animation data needed)
-            for(let i=0; i<aTarget; i++) {
-                if (aIdx >= ACTIVE_COUNT) break;
+            // Generate Active
+            for(let k=0; k<aCount && aIndex < ACTIVE_COUNT; k++) {
                 sampler.sample(tempPos, tempNorm);
-                tempPos.addScaledVector(tempNorm, 0.02); // Float higher than static
-                tempPos.applyMatrix4(item.mesh.matrix);
-                
-                aPos[aIdx*3] = tempPos.x;
-                aPos[aIdx*3+1] = tempPos.y;
-                aPos[aIdx*3+2] = tempPos.z;
+                tempPos.addScaledVector(tempNorm, 0.02); 
+                tempPos.applyMatrix4(item.mesh.matrix); 
+                aPos[aIndex*3] = tempPos.x;
+                aPos[aIndex*3+1] = tempPos.y;
+                aPos[aIndex*3+2] = tempPos.z;
+                activeData[aIndex] = { region: regionID, v: -65-Math.random()*20, u: 0 };
+                aIndex++;
+            }
 
-                // Init Sim Data
-                particleData[aIdx] = {
-                    region: regionID,
-                    v: -65 - Math.random()*20,
-                    u: 0
-                };
-                aIdx++;
+            // Yield to main thread every CHUNK_SIZE meshes
+            if (i % CHUNK_SIZE === 0) {
+                const progress = Math.round((i / meshList.length) * 100);
+                progressBar.style.width = `${progress}%`;
+                subStatus.innerText = `${sIndex} nodes created`;
+                await new Promise(resolve => setTimeout(resolve, 0));
             }
         }
 
-        // Add Static Cloud
+        // Finalize
         const sGeo = new THREE.BufferGeometry();
         sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
         staticCloud = new THREE.Points(sGeo, MAT_STATIC);
         brainGroup.add(staticCloud);
 
-        // Add Active Cloud
         const aGeo = new THREE.BufferGeometry();
         aGeo.setAttribute('position', new THREE.BufferAttribute(aPos, 3));
         aGeo.setAttribute('color', new THREE.BufferAttribute(aCol, 3));
         activeCloud = new THREE.Points(aGeo, MAT_ACTIVE);
         brainGroup.add(activeCloud);
+
+        loadingScreen.style.opacity = 0;
+        setTimeout(() => loadingScreen.style.display = 'none', 500);
     }
 
-    // --- SIMULATION (Lightweight Loop) ---
     function updateSimulation() {
         if (!activeCloud) return;
         const colors = activeCloud.geometry.attributes.color.array;
         const dt = 0.9;
 
         for (let i = 0; i < ACTIVE_COUNT; i++) {
-            const p = particleData[i];
+            const p = activeData[i];
             if(!p) continue;
 
             const isTarget = (currentActiveRegion && p.region === currentActiveRegion);
             const isWhole = !currentActiveRegion;
 
-            // Fire Logic
             let threshold = 0.99;
-            if(isTarget) threshold = 0.96; // High activity
-            if(!isWhole && !isTarget) threshold = 0.9995; // Sleeping
+            if(isTarget) threshold = 0.96; 
+            if(!isWhole && !isTarget) threshold = 0.9995;
 
             const input = (Math.random() > threshold) ? 20 : 0;
-            
             p.v += (0.04 * p.v * p.v + 5 * p.v + 140 - p.u + input) * dt;
             p.u += (0.02 * (0.2 * p.v - p.u)) * dt;
 
             if (p.v >= 30.0) {
                 p.v = -65; p.u += 8;
-                // SPIKE COLOR (White/Cyan)
-                colors[i*3] = 0.7; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0; 
+                colors[i*3] = 0.7; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0; // Spike
             } else {
-                // DECAY COLOR
-                // If active, base is blue. If inactive, base is invisible (black)
                 let r=0, g=0, b=0;
-                if (isTarget || isWhole) { r=0; g=0.1; b=0.3; } // Resting state
+                if(isTarget || isWhole) { r=0; g=0.1; b=0.3; } // Base Blue
                 
-                // Smooth blend
                 colors[i*3] += (r - colors[i*3]) * 0.15;
                 colors[i*3+1] += (g - colors[i*3+1]) * 0.15;
                 colors[i*3+2] += (b - colors[i*3+2]) * 0.15;
@@ -293,61 +278,57 @@
         activeCloud.geometry.attributes.color.needsUpdate = true;
     }
 
-    // --- UI & INTERACTION ---
-    const select = document.getElementById('region-select');
-    for(let r in REGIONS) {
-        const o = document.createElement('option');
-        o.value = r; o.innerText = r; select.appendChild(o);
-    }
-
-    select.addEventListener('change', (e) => {
-        currentActiveRegion = e.target.value;
-        
-        // Update Solid Mesh Highlighting (Performance cheap)
-        solidMeshes.forEach(m => {
-            let isActive = false;
-            if (currentActiveRegion && REGIONS[currentActiveRegion].some(k => m.userData.originalName.includes(k))) isActive = true;
-            
-            if(isActive) m.material = MAT_SOLID_ACTIVE;
-            else m.material = MAT_SOLID;
-        });
-    });
-
-    // --- LOAD ---
-    const text = document.getElementById('status-text');
+    // --- LOADER ---
     const loader = new GLTFLoader();
     const draco = new DRACOLoader();
     draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
     loader.setDRACOLoader(draco);
 
-    text.innerText = "DOWNLOADING...";
+    statusText.innerText = "DOWNLOADING...";
 
     loader.load('./rotten_brain.glb?v='+Math.random(), (gltf) => {
-        text.innerText = "ASSEMBLING...";
         const brain = gltf.scene;
-
-        // Center & Scale (The Wrapper Method)
-        const box = new THREE.Box3().setFromObject(brain);
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        brain.position.sub(center); // Centered locally
         
+        // Scale/Center First
+        const box = new THREE.Box3().setFromObject(brain);
+        const size = new THREE.Vector3(); box.getSize(size);
+        const center = new THREE.Vector3(); box.getCenter(center);
+        brain.position.sub(center);
         const maxDim = Math.max(size.x, size.y, size.z);
-        if(maxDim > 0) rootGroup.scale.setScalar(12.0 / maxDim); // Universal Scale
+        if(maxDim > 0) rootGroup.scale.setScalar(12.0 / maxDim);
 
-        // Process
-        setTimeout(() => {
-            buildBrain(brain);
-            document.getElementById('loading-screen').style.display = 'none';
-        }, 50);
+        // Start Chunked Generation
+        buildBrainAsync(brain);
 
-    }, undefined, (e) => {
-        console.error(e);
-        text.innerText = "ERROR";
-        text.style.color = "red";
+    }, (xhr) => {
+        if(xhr.lengthComputable) {
+            const pct = Math.round((xhr.loaded/xhr.total)*100);
+            progressBar.style.width = `${pct}%`;
+            subStatus.innerText = "Receiving Data...";
+        }
+    }, (err) => {
+        statusText.innerText = "ERROR";
+        statusText.style.color = "red";
+        subStatus.innerText = "Load Failed";
     });
 
-    // --- LOOP ---
+    // --- UI ---
+    const selectEl = document.getElementById('region-select');
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key; opt.innerText = key; selectEl.appendChild(opt);
+    });
+
+    selectEl.addEventListener('change', (e) => {
+        currentActiveRegion = e.target.value;
+        solidMeshes.forEach(m => {
+            let isActive = false;
+            if(currentActiveRegion && REGIONS[currentActiveRegion].some(k => m.userData.originalName.includes(k))) isActive = true;
+            m.material = isActive ? MAT_SOLID_ACTIVE : MAT_SOLID;
+        });
+    });
+
+    controls.addEventListener('start', () => controls.autoRotate = false);
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth/window.innerHeight;
         camera.updateProjectionMatrix();

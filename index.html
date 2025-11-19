@@ -1,165 +1,104 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rotten Brain 3D Viewer</title>
-  <style>
-    html, body {
-      margin: 0;
-      height: 100%;
-      overflow: hidden;
-      background: #020617;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    canvas { display: block; }
-    #overlay {
-      position: fixed; inset: 0;
-      display: flex; align-items: center; justify-content: center;
-      background: rgba(15,23,42,0.85);
-      color: #e5e7eb; z-index: 10;
-      text-align: center; font-size: 0.95rem;
-    }
-    #overlay span {
-      padding: 0.75rem 1.5rem;
-      background: rgba(15,23,42,0.95);
-      border-radius: 0.75rem;
-      box-shadow: 0 20px 45px rgba(0,0,0,0.7);
-    }
-  </style>
+    <meta charset="UTF-8">
+    <!-- Fixes mobile view scaling issues -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Rotten Brain Viewer</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; width: 100%; height: 100%; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-family: sans-serif; font-size: 1.2rem; pointer-events: none;
+        }
+    </style>
 </head>
 <body>
-  <div id="overlay"><span>Loading rotten_brain.glb…</span></div>
 
-  <!-- Single ES‑module script; no other script tags on the page -->
-  <script type="module">
-    import * as THREE from "https://unpkg.com/three@0.159.0/build/three.module.js";
-    import { GLTFLoader } from "https://unpkg.com/three@0.159.0/examples/jsm/loaders/GLTFLoader.js";
+<div id="loading">Loading Rotten Brain...</div>
 
-    // index.html and rotten_brain.glb must be in the same folder in your repo.
-    const MODEL_URL = "./rotten_brain.glb";
-
-    const overlay = document.getElementById("overlay");
-    let scene, camera, renderer, modelRoot;
-
-    init();
-    loadModel();
-    animate();
-
-    function init() {
-      scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x020617);
-
-      camera = new THREE.PerspectiveCamera(
-        50,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        1000
-      );
-
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.outputEncoding = THREE.sRGBEncoding;
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.0;
-      document.body.appendChild(renderer.domElement);
-      onWindowResize();
-
-      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-      scene.add(ambient);
-
-      const keyLight = new THREE.DirectionalLight(0xffffff, 1.4);
-      keyLight.position.set(4, 6, 8);
-      scene.add(keyLight);
-
-      const rimLight = new THREE.DirectionalLight(0x60a5fa, 0.6);
-      rimLight.position.set(-6, 3, -4);
-      scene.add(rimLight);
-
-      window.addEventListener("resize", onWindowResize, false);
-
-      window.addEventListener("error", (e) => {
-        console.error(e.message);
-        overlay.style.display = "flex";
-        overlay.firstElementChild.innerHTML =
-          "JS error: " + e.message +
-          "<br><small>Open DevTools console for full details.</small>";
-      });
+<!-- 1. IMPORT MAP: Fixes "Failed to resolve module specifier" -->
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
     }
+  }
+</script>
 
-    function loadModel() {
-      overlay.style.display = "flex";
-      overlay.firstElementChild.textContent = "Loading rotten_brain.glb…";
+<!-- 2. MAIN SCRIPT -->
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-      const loader = new GLTFLoader(); // module class, not THREE.GLTFLoader
-      loader.load(
-        MODEL_URL,
-        (gltf) => {
-          modelRoot = gltf.scene;
-          scene.add(modelRoot);
+    // Setup Scene
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111); // Dark gray
 
-          const box = new THREE.Box3().setFromObject(modelRoot);
-          const center = box.getCenter(new THREE.Vector3());
-          const size = box.getSize(new THREE.Vector3());
+    // Setup Camera
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 5);
 
-          modelRoot.position.sub(center);
+    // Setup Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio); // Sharpness for mobile screens
+    document.body.appendChild(renderer.domElement);
 
-          const maxDim = Math.max(size.x, size.y, size.z);
-          const targetSize = 4;
-          const scale = targetSize / maxDim;
-          modelRoot.scale.setScalar(scale);
+    // Setup Controls
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
 
-          const scaledBox = new THREE.Box3().setFromObject(modelRoot);
-          const diag = scaledBox.min.distanceTo(scaledBox.max);
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 2); // Bright enough to see details
+    scene.add(ambientLight);
 
-          const fov = camera.fov * (Math.PI / 180);
-          const dist = (diag / (2 * Math.tan(fov / 2))) * 1.6;
+    const dirLight = new THREE.DirectionalLight(0xffffff, 3);
+    dirLight.position.set(5, 10, 7.5);
+    scene.add(dirLight);
 
-          camera.position.set(0, diag * 0.15, dist);
-          camera.lookAt(0, 0, 0);
-          camera.updateProjectionMatrix();
+    // Load the Model
+    const loader = new GLTFLoader();
 
-          modelRoot.traverse((obj) => {
-            if (obj.isMesh && obj.material && obj.material.isMaterial) {
-              obj.material.side = THREE.DoubleSide;
-              obj.material.needsUpdate = true;
-            }
-          });
+    // LOADING YOUR SPECIFIC FILE HERE:
+    loader.load('./rotten_brain.glb', function (gltf) {
+        
+        const model = gltf.scene;
+        
+        // Center the model (fixes issues if the model was exported far from origin)
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.sub(center); 
+        
+        scene.add(model);
+        
+        // Remove loading text
+        document.getElementById('loading').style.display = 'none';
 
-          overlay.style.display = "none";
-        },
-        (xhr) => {
-          if (xhr.lengthComputable) {
-            const p = Math.round((xhr.loaded / xhr.total) * 100);
-            overlay.firstElementChild.textContent =
-              "Loading rotten_brain.glb… " + p + "%";
-          } else {
-            overlay.firstElementChild.textContent =
-              "Loading rotten_brain.glb…";
-          }
-        },
-        (error) => {
-          console.error("GLB load error:", error);
-          overlay.style.display = "flex";
-          overlay.firstElementChild.innerHTML =
-            "Failed to load rotten_brain.glb." +
-            "<br><small>Check that index.html and rotten_brain.glb are in the same folder and that GitHub Pages is serving this branch.</small>";
-        }
-      );
-    }
+    }, undefined, function (error) {
+        console.error(error);
+        document.getElementById('loading').innerText = 'Error loading file. Check console.';
+        alert("Could not load ./rotten_brain.glb");
+    });
 
-    function onWindowResize() {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
-    }
+    // Handle Resize
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
 
+    // Animation Loop
     function animate() {
-      requestAnimationFrame(animate);
-      renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
     }
-  </script>
+    animate();
+</script>
+
 </body>
 </html>

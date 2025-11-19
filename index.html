@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Holographic Brain - Purple</title>
+    <title>Hybrid Brain Atlas</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -28,10 +28,10 @@
             display: flex; justify-content: center; pointer-events: none; z-index: 10;
         }
         select {
-            pointer-events: auto; padding: 15px; background: rgba(10,10,10,0.9);
-            color: #aa00ff; border: 1px solid #550088; border-radius: 8px; font-size: 18px;
-            text-transform: uppercase; font-weight: bold; box-shadow: 0 0 25px rgba(170, 0, 255, 0.2);
-            min-width: 220px; text-align: center;
+            pointer-events: auto; padding: 15px; background: rgba(15,15,15,0.95);
+            color: #d000ff; border: 1px solid #6600aa; border-radius: 8px; font-size: 18px;
+            text-transform: uppercase; font-weight: bold; box-shadow: 0 0 30px rgba(160, 0, 255, 0.2);
+            min-width: 220px; text-align: center; outline: none;
         }
         
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -42,7 +42,7 @@
 <div id="loading-screen">
     <div class="spinner"></div>
     <div id="status-text">INITIALIZING...</div>
-    <div id="sub-status">Establishing Neural Link</div>
+    <div id="sub-status">Building Solid Core</div>
 </div>
 
 <div id="ui-container">
@@ -66,8 +66,8 @@
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
     // --- CONFIGURATION ---
-    const POINT_COUNT = 100000; 
-    const PARTICLE_SIZE = 0.05; 
+    const POINT_COUNT = 120000; // High density on top of solid core
+    const PARTICLE_SIZE = 0.035; // Sharp dots
     
     const REGIONS = {
         "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "cingulate"],
@@ -85,17 +85,17 @@
     scene.background = new THREE.Color(0x000000);
 
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 14); 
+    camera.position.set(0, 0, 16); 
 
-    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); 
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     document.body.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false; 
-    controls.minDistance = 5; controls.maxDistance = 40;
-    controls.autoRotate = true; controls.autoRotateSpeed = 0.5;
+    controls.minDistance = 4; controls.maxDistance = 45;
+    controls.autoRotate = true; controls.autoRotateSpeed = 0.4;
 
     // --- MANAGER ---
     const rootGroup = new THREE.Group();
@@ -105,11 +105,12 @@
     let particleData = []; 
     let currentActiveRegion = null; 
 
+    // UI Refs
     const statusText = document.getElementById('status-text');
     const subStatus = document.getElementById('sub-status');
     const loadingScreen = document.getElementById('loading-screen');
 
-    // --- HELPER ---
+    // --- HELPER: MESH AREA ---
     function getMeshArea(mesh) {
         const geom = mesh.geometry;
         if (geom.index) {
@@ -121,9 +122,7 @@
                 a.fromBufferAttribute(pos, index.getX(i));
                 b.fromBufferAttribute(pos, index.getX(i+1));
                 c.fromBufferAttribute(pos, index.getX(i+2));
-                const edge1 = b.sub(a);
-                const edge2 = c.sub(a);
-                const cross = new THREE.Vector3().crossVectors(edge1, edge2);
+                const cross = new THREE.Vector3().crossVectors(b.sub(a), c.sub(a));
                 area += 0.5 * cross.length();
             }
             return area;
@@ -131,24 +130,39 @@
         return 1.0; 
     }
 
-    function createPointCloud(brainMesh) {
+    function createHybridBrain(brainMesh) {
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(POINT_COUNT * 3);
         const colors = new Float32Array(POINT_COUNT * 3);
         const tempPos = new THREE.Vector3();
+        const tempNormal = new THREE.Vector3();
 
         let meshData = [];
         let totalArea = 0;
-
-        statusText.innerText = "MAPPING TOPOLOGY...";
         
+        // MATERIAL FOR SOLID CORE
+        // Matte dark charcoal -> Blocks background, provides shape
+        const solidMat = new THREE.MeshStandardMaterial({
+            color: 0x151515,
+            roughness: 0.8,
+            metalness: 0.2,
+        });
+
+        statusText.innerText = "BUILDING SOLID CORE...";
+
         brainMesh.traverse(c => {
             if(c.isMesh) {
+                // 1. PREP SOLID MESH
+                // We do NOT dispose the geometry. We reuse it.
+                c.material = solidMat; // Apply dark matte material
+                
+                // 2. PREP DATA FOR SAMPLING
                 c.updateMatrixWorld();
                 const area = getMeshArea(c);
-                const scale = c.scale.x;
-                const worldArea = area * scale * scale; 
+                const scale = c.scale.x; 
+                const worldArea = area * scale * scale;
                 totalArea += worldArea;
+                
                 meshData.push({
                     mesh: c,
                     name: (c.name || "").toLowerCase(),
@@ -157,27 +171,30 @@
                 });
             }
         });
+        
+        // 3. Add Solid Brain to Group (Visible!)
+        rootGroup.add(brainMesh);
 
-        // Smart Distribution
+        // 4. DISTRIBUTION CALC
         let pointsAllocated = 0;
         meshData.sort((a,b) => b.area - a.area); 
 
         for(let i=0; i<meshData.length; i++) {
             const part = meshData[i];
             let count = Math.floor((part.area / totalArea) * POINT_COUNT);
-            if (count < 25) count = 25; // Minimum 
+            if (count < 20) count = 20; // Minimums
             part.count = count;
             pointsAllocated += count;
-            
             if(pointsAllocated > POINT_COUNT) {
                 part.count -= (pointsAllocated - POINT_COUNT);
                 pointsAllocated = POINT_COUNT;
             }
         }
 
-        subStatus.innerText = `Synthesizing ${pointsAllocated} Neurons...`;
+        statusText.innerText = "PLANTING NEURONS...";
+        subStatus.innerText = "Wrapping Geometry";
 
-        // Generate Points
+        // 5. GENERATE POINTS
         let cursor = 0;
         for(let m = 0; m < meshData.length; m++) {
             const data = meshData[m];
@@ -188,13 +205,20 @@
             for(let i = 0; i < data.count; i++) {
                 if (cursor >= POINT_COUNT) break;
 
-                sampler.sample(tempPos);
+                sampler.sample(tempPos, tempNormal);
+                
+                // IMPORTANT: Push points OUTWARD slightly
+                // This ensures they sit ON TOP of the solid black mesh
+                tempPos.addScaledVector(tempNormal, 0.008); 
+
+                // Apply Transform to World
                 tempPos.applyMatrix4(data.mesh.matrixWorld);
 
                 positions[cursor*3] = tempPos.x;
                 positions[cursor*3+1] = tempPos.y;
                 positions[cursor*3+2] = tempPos.z;
 
+                // Determine Region
                 let regionID = null;
                 for(const [rName, keywords] of Object.entries(REGIONS)) {
                     if (keywords.some(k => data.name.includes(k))) {
@@ -202,8 +226,8 @@
                     }
                 }
 
-                // Base Color: Blue-Grey
-                colors[cursor*3] = 0.2; colors[cursor*3+1] = 0.25; colors[cursor*3+2] = 0.35;
+                // Default Color (Faint Steel)
+                colors[cursor*3] = 0.2; colors[cursor*3+1] = 0.3; colors[cursor*3+2] = 0.4;
 
                 particleData[cursor] = { 
                     region: regionID, 
@@ -214,25 +238,32 @@
             }
         }
 
-        // Normalize to Center
+        // 6. CENTERING & SCALING
+        // We scale BOTH the Solid Mesh AND the Points
         let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity, minZ=Infinity, maxZ=-Infinity;
         for(let i=0; i<cursor*3; i+=3) {
-            const x=positions[i], y=positions[i+1], z=positions[i+2];
-            if(x<minX) minX=x; if(x>maxX) maxX=x;
-            if(y<minY) minY=y; if(y>maxY) maxY=y;
-            if(z<minZ) minZ=z; if(z>maxZ) maxZ=z;
+            if(positions[i] < minX) minX = positions[i]; if(positions[i] > maxX) maxX = positions[i];
+            if(positions[i+1] < minY) minY = positions[i+1]; if(positions[i+1] > maxY) maxY = positions[i+1];
+            if(positions[i+2] < minZ) minZ = positions[i+2]; if(positions[i+2] > maxZ) maxZ = positions[i+2];
         }
         
-        const centerX = (minX+maxX)/2, centerY = (minY+maxY)/2, centerZ = (minZ+maxZ)/2;
+        const center = { x: (minX+maxX)/2, y: (minY+maxY)/2, z: (minZ+maxZ)/2 };
         const size = Math.max(maxX-minX, maxY-minY, maxZ-minZ);
-        const scale = 15.0 / size; 
+        const finalScale = 15.0 / size; 
 
+        // Apply Scale to Points
         for(let i=0; i<cursor*3; i+=3) {
-            positions[i] = (positions[i] - centerX) * scale;
-            positions[i+1] = (positions[i+1] - centerY) * scale;
-            positions[i+2] = (positions[i+2] - centerZ) * scale;
+            positions[i] = (positions[i] - center.x) * finalScale;
+            positions[i+1] = (positions[i+1] - center.y) * finalScale;
+            positions[i+2] = (positions[i+2] - center.z) * finalScale;
         }
 
+        // Apply Scale to Solid Mesh (Manual Matrix)
+        // We undo the centering we did in 'load' and apply this new centering/scale
+        brainMesh.position.set(-center.x * finalScale, -center.y * finalScale, -center.z * finalScale);
+        brainMesh.scale.setScalar(finalScale);
+        // Note: Ideally we center the group, but moving the mesh works here since parent is scene.
+        
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
@@ -240,10 +271,10 @@
             size: PARTICLE_SIZE,
             vertexColors: true,
             transparent: true,
-            opacity: 0.85, 
+            opacity: 1.0,
             sizeAttenuation: true,
             depthWrite: false,
-            blending: THREE.AdditiveBlending 
+            blending: THREE.AdditiveBlending
         });
 
         pointCloud = new THREE.Points(geometry, material);
@@ -255,11 +286,9 @@
         const colors = pointCloud.geometry.attributes.color.array;
         const dt = 0.8;
 
-        // --- COLORS ---
-        // Base Brain: Steel Blue (Visible)
-        const baseR=0.15, baseG=0.25, baseB=0.35; 
-        // Selected Region: Neon Purple
-        const actR=0.7, actG=0.0, actB=1.0;
+        // COLORS
+        const baseR=0.1, baseG=0.2, baseB=0.35; // Default
+        const actR=0.8, actG=0.0, actB=1.0;     // Purple
         
         for (let i = 0; i < POINT_COUNT; i++) {
             const p = particleData[i];
@@ -268,37 +297,32 @@
             const isTarget = (currentActiveRegion && p.region === currentActiveRegion);
             const isWholeBrain = !currentActiveRegion;
 
-            let fireProb = isTarget ? 0.98 : (isWholeBrain ? 0.998 : 0.9999);
-            const input = (Math.random() > fireProb) ? 25 : 0;
+            // Input Noise
+            let fireProb = isTarget ? 0.97 : (isWholeBrain ? 0.999 : 0.9999);
+            const input = (Math.random() > fireProb) ? 30 : 0;
 
             p.v += (0.04 * p.v * p.v + 5 * p.v + 140 - p.u + input) * dt;
             p.u += (0.02 * (0.2 * p.v - p.u)) * dt;
 
             if (p.v >= 30.0) {
                 p.v = -65.0; p.u += 8.0;
-                
-                if (isTarget) {
-                     // Purple Region Fires White/Violet
-                    colors[i*3] = 1.0; colors[i*3+1] = 0.8; colors[i*3+2] = 1.0;
-                } else {
-                    // Normal Brain fires White/Cyan
-                    colors[i*3] = 0.8; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0;
-                }
+                // FLASH
+                colors[i*3] = 1.0; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0;
             } else {
-                // Decay
+                // DECAY & DIMMING
                 let tr, tg, tb;
                 
                 if (isTarget) {
-                    // Selected Region becomes Purple
-                    tr=actR; tg=actG; tb=actB;
+                    tr=actR; tg=actG; tb=actB; // Active Purple
+                } else if (!isWholeBrain) {
+                    tr=0.02; tg=0.02; tb=0.02; // DIM OTHERS to near-black
                 } else {
-                    // EVERYTHING ELSE stays Base Blue (No dimming!)
-                    tr=baseR; tg=baseG; tb=baseB;
+                    tr=baseR; tg=baseG; tb=baseB; // Base Steel
                 }
 
-                colors[i*3] += (tr - colors[i*3]) * 0.15;
-                colors[i*3+1] += (tg - colors[i*3+1]) * 0.15;
-                colors[i*3+2] += (tb - colors[i*3+2]) * 0.15;
+                colors[i*3] += (tr - colors[i*3]) * 0.1;
+                colors[i*3+1] += (tg - colors[i*3+1]) * 0.1;
+                colors[i*3+2] += (tb - colors[i*3+2]) * 0.1;
             }
         }
         pointCloud.geometry.attributes.color.needsUpdate = true;
@@ -311,19 +335,26 @@
     const loader = new GLTFLoader();
     loader.setDRACOLoader(dracoLoader);
 
-    statusText.innerText = "DOWNLOADING...";
+    statusText.innerText = "CONNECTING...";
 
     loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
         
+        // Pre-center the mesh geometry before doing anything else
+        const brain = gltf.scene;
+        const box = new THREE.Box3().setFromObject(brain);
+        const center = box.getCenter(new THREE.Vector3());
+        brain.position.sub(center); // Center at local 0,0,0
+        brain.updateMatrixWorld(); // Bake it
+
         setTimeout(() => {
-            createPointCloud(gltf.scene);
+            createHybridBrain(brain);
             loadingScreen.style.opacity = 0;
             setTimeout(() => loadingScreen.style.display = 'none', 500);
         }, 50);
 
     }, (xhr) => {
         if(xhr.lengthComputable) {
-            statusText.innerText = `DOWNLOADING ${Math.round((xhr.loaded/xhr.total)*100)}%`;
+            statusText.innerText = `LOADING... ${Math.round((xhr.loaded/xhr.total)*100)}%`;
         }
     }, (err) => console.error(err));
 
@@ -334,6 +365,7 @@
         opt.value = key; opt.innerText = key; selectEl.appendChild(opt);
     });
     selectEl.addEventListener('change', (e) => { currentActiveRegion = e.target.value; });
+    
     controls.addEventListener('start', () => { controls.autoRotate = false; });
 
     window.addEventListener('resize', () => {

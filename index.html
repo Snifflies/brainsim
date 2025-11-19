@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Atlas - Stable</title>
+    <title>Brain Neural Network</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -16,19 +16,19 @@
         }
         .spinner {
             width: 50px; height: 50px; border: 4px solid #222;
-            border-top: 4px solid #00ff88; border-radius: 50%;
+            border-top: 4px solid #00d8ff; border-radius: 50%;
             animation: spin 1s linear infinite; margin-bottom: 20px;
         }
         #status-text { color: #fff; font-size: 1.1rem; text-align: center; }
-        #sub-status { color: #666; font-size: 0.8rem; margin-top: 10px; max-width: 80%; }
         
         #ui-container {
             position: absolute; bottom: 30px; left: 0; width: 100%;
             display: flex; justify-content: center; pointer-events: none; z-index: 10;
         }
         select {
-            pointer-events: auto; padding: 12px; background: rgba(20,20,20,0.9);
-            color: white; border: 1px solid #444; border-radius: 8px; font-size: 16px;
+            pointer-events: auto; padding: 12px; background: rgba(10,10,10,0.95);
+            color: #00d8ff; border: 1px solid #333; border-radius: 8px; font-size: 16px;
+            text-transform: uppercase; font-weight: bold;
         }
         
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -38,8 +38,7 @@
 
 <div id="loading-screen">
     <div class="spinner"></div>
-    <div id="status-text">INITIALIZING SYSTEM...</div>
-    <div id="sub-status">Please wait...</div>
+    <div id="status-text">INITIALIZING...</div>
 </div>
 
 <div id="ui-container">
@@ -62,21 +61,22 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
-    // UI Refs
-    const statusText = document.getElementById('status-text');
-    const subStatus = document.getElementById('sub-status');
-    const loadingScreen = document.getElementById('loading-screen');
-
-    // --- 1. NEURON MANAGER ---
+    // --- 1. HIGH PERFORMANCE NEURON SYSTEM ---
     class NeuronManager {
         constructor(scene, count) {
             this.scene = scene;
             this.count = count;
             this.points = null;
-            // Izhikevich vars
+            
+            // Izhikevich Parameters
             this.v = new Float32Array(count);
             this.u = new Float32Array(count);
-            for(let i=0; i<count; i++) { this.v[i] = -65.0; this.u[i] = 0.2 * this.v[i]; }
+            
+            // Randomize start times so they don't all flash at once
+            for(let i=0; i<count; i++) { 
+                this.v[i] = -65.0 + Math.random()*10; 
+                this.u[i] = 0.2 * this.v[i]; 
+            }
         }
 
         init(frontalMeshes) {
@@ -85,29 +85,52 @@
             const geometry = new THREE.BufferGeometry();
             const positions = new Float32Array(this.count * 3);
             const colors = new Float32Array(this.count * 3);
+            
             const tempPos = new THREE.Vector3();
-            let created = 0, meshIndex = 0;
+            const tempNormal = new THREE.Vector3();
+            
+            let created = 0;
+            let meshIndex = 0;
 
+            // Generate Neurons
             while(created < this.count) {
                 const mesh = frontalMeshes[meshIndex % frontalMeshes.length];
                 meshIndex++;
+                
                 const sampler = new MeshSurfaceSampler(mesh).build();
                 
-                for(let k=0; k<8 && created < this.count; k++) {
-                    sampler.sample(tempPos);
+                // Sample 20 points per mesh pass to distribute evenly
+                for(let k=0; k<20 && created < this.count; k++) {
+                    // Get Position AND Normal (Direction facing out)
+                    sampler.sample(tempPos, tempNormal);
+                    
+                    // TRICK: Push the neuron OUTWARD along the normal
+                    // This makes them float above the brain surface so they are visible
+                    tempPos.addScaledVector(tempNormal, 0.4); 
+
                     positions[created*3] = tempPos.x;
                     positions[created*3+1] = tempPos.y;
                     positions[created*3+2] = tempPos.z;
-                    colors[created*3] = 0.1; colors[created*3+1] = 0.1; colors[created*3+2] = 0.6; // Blue
+                    
+                    // Start Dark Blue
+                    colors[created*3] = 0.0; 
+                    colors[created*3+1] = 0.0; 
+                    colors[created*3+2] = 0.2; 
                     created++;
                 }
             }
+            
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             
+            // Glowing Dots Material
             const material = new THREE.PointsMaterial({
-                size: 0.2, vertexColors: true, transparent: true, opacity: 0.8,
-                blending: THREE.AdditiveBlending, depthWrite: false
+                size: 0.15, 
+                vertexColors: true, 
+                transparent: true, 
+                opacity: 1.0,
+                blending: THREE.AdditiveBlending, // Makes them glow when overlapping
+                depthWrite: false
             });
 
             this.points = new THREE.Points(geometry, material);
@@ -117,53 +140,72 @@
         update() {
             if (!this.points) return;
             const colors = this.points.geometry.attributes.color.array;
-            const dt = 0.8; // Speed multiplier
+            const dt = 0.9; // Simulation speed
             
             for (let i = 0; i < this.count; i++) {
-                const input = (Math.random() > 0.985) ? 15 : 0; // Random input
-                let v = this.v[i], u = this.u[i];
+                // Random chaotic input
+                const input = (Math.random() > 0.99) ? 20 : 0; 
                 
-                // Integration
+                let v = this.v[i]; 
+                let u = this.u[i];
+                
+                // Math Magic (Izhikevich Model)
                 v += (0.04 * v * v + 5 * v + 140 - u + input) * dt;
                 u += (0.02 * (0.2 * v - u)) * dt;
 
-                if (v >= 30.0) { // Spike
-                    v = -65.0; u += 8.0;
-                    colors[i*3] = 0.8; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0; // Flash White/Cyan
-                } else { // Decay
-                    colors[i*3] *= 0.9; colors[i*3+1] *= 0.9; colors[i*3+2] = Math.max(0.2, colors[i*3+2]*0.95);
+                // Spike Condition
+                if (v >= 30.0) { 
+                    v = -65.0; 
+                    u += 8.0;
+                    
+                    // FLASH EFFECT: Turn bright Cyan/White
+                    colors[i*3] = 0.6;   // R
+                    colors[i*3+1] = 1.0; // G
+                    colors[i*3+2] = 1.0; // B
+                } else { 
+                    // Decay back to dark blue/black
+                    colors[i*3] *= 0.9; 
+                    colors[i*3+1] *= 0.9; 
+                    colors[i*3+2] = Math.max(0.1, colors[i*3+2]*0.95);
                 }
-                this.v[i] = v; this.u[i] = u;
+                
+                this.v[i] = v; 
+                this.u[i] = u;
             }
+            
             this.points.geometry.attributes.color.needsUpdate = true;
         }
     }
 
-    // --- 2. SCENE ---
+    // --- 2. SCENE & CAMERA ---
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
+    
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
     camera.position.set(0,0,25);
     
     const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Optimize
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     document.body.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enablePan = false; controls.minDistance = 5; controls.maxDistance = 70;
-    controls.autoRotate = true; controls.autoRotateSpeed = 1.0;
+    controls.enablePan = false; 
+    controls.minDistance = 5; 
+    controls.maxDistance = 60;
+    controls.autoRotate = true; 
+    controls.autoRotateSpeed = 0.5;
 
     // Lights
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x222222, 1.2));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x111111, 1.2));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
     dirLight.position.set(10, 10, 10);
     scene.add(dirLight);
 
-    // --- 3. CONFIG ---
-    const MAT_BASE = new THREE.MeshLambertMaterial({ color: 0xdddddd });
-    const MAT_ACTIVE = new THREE.MeshLambertMaterial({ color: 0xff0055, emissive: 0x440022, emissiveIntensity: 0.5 });
-    const MAT_GHOST = new THREE.MeshLambertMaterial({ color: 0x181818 }); // Opaque dark grey = fast
+    // --- 3. CONFIG & MATERIALS ---
+    const MAT_BASE = new THREE.MeshLambertMaterial({ color: 0xeeeeee });
+    const MAT_ACTIVE = new THREE.MeshLambertMaterial({ color: 0x00d8ff, emissive: 0x004466, emissiveIntensity: 0.6 });
+    const MAT_GHOST = new THREE.MeshLambertMaterial({ color: 0x111111 }); // Opaque dark background
 
     const REGIONS = {
         "Frontal Lobe": ["frontal", "precentral", "rectus", "orbital", "cingulate"],
@@ -177,37 +219,31 @@
         "Ventricles": ["ventricle", "aqueduct"]
     };
 
-    // --- 4. LOADING ---
+    // --- 4. LOAD & PROCESS ---
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
-    const neuronSim = new NeuronManager(scene, 800); // 800 Neurons for stability
+    
+    // INCREASED COUNT: 4000 Neurons
+    const neuronSim = new NeuronManager(scene, 4000); 
+    
     let allParts = [];
     let frontalParts = [];
 
-    // SETTING UP DECODERS
-    statusText.innerText = "INIT DECODER...";
+    const statusText = document.getElementById('status-text');
+    const loadingScreen = document.getElementById('loading-screen');
+
     const dracoLoader = new DRACOLoader();
-    // Use Google CDN - Safer than Unpkg
     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
-    dracoLoader.preload(); // Force load immediately
+    dracoLoader.preload();
 
     const loader = new GLTFLoader();
     loader.setDRACOLoader(dracoLoader);
 
-    // Timeout Failsafe
-    setTimeout(() => {
-        if (loadingScreen.style.display !== 'none' && !allParts.length) {
-            statusText.innerText = "TIMEOUT ERROR";
-            statusText.style.color = "red";
-            subStatus.innerText = "Check internet connection or file name.";
-        }
-    }, 20000); // 20 seconds max
-
     statusText.innerText = "DOWNLOADING...";
-    
+
     loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
         
-        statusText.innerText = "BUILDING SCENE...";
+        statusText.innerText = "BUILDING NEURONS...";
         const brain = gltf.scene;
 
         brain.traverse((child) => {
@@ -217,6 +253,7 @@
                 child.userData.originalName = (child.name || "").toLowerCase();
                 allParts.push(child);
                 
+                // Check if this is a Frontal Lobe part
                 if (REGIONS["Frontal Lobe"].some(k => child.userData.originalName.includes(k))) {
                     frontalParts.push(child);
                 }
@@ -225,37 +262,34 @@
 
         rootGroup.add(brain);
 
-        // Center
+        // Center & Scale
         const box = new THREE.Box3().setFromObject(brain);
         const size = new THREE.Vector3(); box.getSize(size);
         const center = new THREE.Vector3(); box.getCenter(center);
         brain.position.sub(center);
-
-        // Scale
         const maxDim = Math.max(size.x, size.y, size.z);
         if (maxDim > 0) rootGroup.scale.setScalar(10.0 / maxDim);
 
-        // Neurons (Delayed to prevent frame drop during transition)
+        // Init Neurons (Small delay to prevent UI freeze)
         if (frontalParts.length > 0) {
-            subStatus.innerText = "Planting Neurons...";
-            setTimeout(() => neuronSim.init(frontalParts), 50);
+            setTimeout(() => {
+                neuronSim.init(frontalParts);
+                loadingScreen.style.opacity = 0;
+                setTimeout(() => loadingScreen.style.display = 'none', 500);
+            }, 50);
+        } else {
+            loadingScreen.style.display = 'none';
         }
-
-        // Finish
-        loadingScreen.style.opacity = 0;
-        setTimeout(() => loadingScreen.style.display = 'none', 500);
 
     }, (xhr) => {
         if(xhr.lengthComputable) {
             const pct = Math.round((xhr.loaded / xhr.total) * 100);
             statusText.innerText = `DOWNLOADING... ${pct}%`;
-            subStatus.innerText = `${(xhr.loaded / 1024 / 1024).toFixed(2)} MB`;
         }
     }, (err) => {
-        console.error(err);
         statusText.innerText = "LOAD ERROR";
         statusText.style.color = "red";
-        subStatus.innerText = err.message;
+        console.error(err);
     });
 
     // --- 5. INTERACTION ---
@@ -268,6 +302,7 @@
     selectEl.addEventListener('change', (e) => {
         const val = e.target.value;
         if(!val) { allParts.forEach(p => p.material = MAT_BASE); return; }
+        
         const keys = REGIONS[val];
         allParts.forEach(p => {
             const match = keys.some(k => p.userData.originalName.includes(k));

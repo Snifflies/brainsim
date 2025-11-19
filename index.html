@@ -2,39 +2,150 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <!-- Essential for proper mobile rendering -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Region Viewer</title>
+    <title>Brain Interaction</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         canvas { display: block; width: 100%; height: 100%; outline: none; }
         
-        /* Dropdown UI Container */
         #ui-container {
             position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 10;
-            width: 80%;
-            max-width: 400px;
+            top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 10; width: 80%; max-width: 400px;
             text-align: center;
-            background: rgba(10, 10, 10, 0.85);
-            padding: 15px;
-            border-radius: 12px;
-            border: 1px solid #333;
-            backdrop-filter: blur(5px);
+            background: rgba(20, 20, 20, 0.9);
+            padding: 15px; border-radius: 12px;
+            border: 1px solid #444;
         }
 
         select {
-            width: 100%;
-            padding: 12px;
-            font-size: 16px;
-            background-color: #222;
-            color: #fff;
-            border: 1px solid #555;
-            border-radius: 6px;
+            width: 100%; padding: 12px; font-size: 16px;
+            background-color: #333; color: #fff;
+            border: 1px solid #666; border-radius: 6px;
             outline: none;
+        }
+        
+        label { color: #ccc; display: block; margin-bottom: 8px; font-weight: bold; text-transform: uppercase; font-size: 0.8rem; }
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ff0055; font-weight: bold; font-size: 1.2rem; }
+    </style>
+</head>
+<body>
+
+<div id="loading">Loading Model...</div>
+
+<div id="ui-container">
+    <label for="region-select">Select Brain Region</label>
+    <select id="region-select">
+        <option value="">Whole Brain</option>
+    </select>
+</div>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { NeuronSystem } from './neurons.js';
+    import { BrainRegionManager } from './brainRegions.js';
+
+    // SCENE
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050505);
+    // REMOVED FOG to prevent disappearing on zoom out
+
+    // CAMERA (Initial position, will be auto-adjusted later)
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.set(0, 0, 20); 
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // LIGHTS
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // MANAGERS
+    const neurons = new NeuronSystem(scene);
+    const regionManager = new BrainRegionManager();
+
+    // DROPDOWN
+    const selectEl = document.getElementById('region-select');
+    regionManager.getRegionList().forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.innerText = name;
+        selectEl.appendChild(option);
+    });
+    selectEl.addEventListener('change', (e) => regionManager.highlightRegion(e.target.value));
+
+    // LOAD MODEL
+    const loader = new GLTFLoader();
+    loader.load('./rotten_brain.glb', function (gltf) {
+        const brain = gltf.scene;
+        
+        // 1. CENTER AND SIZE CALCULATION (Fixes the Zoom Issue)
+        const box = new THREE.Box3().setFromObject(brain);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        
+        // Center the model at 0,0,0
+        brain.position.sub(center);
+        
+        // Calculate best camera distance based on model size
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const fov = camera.fov * (Math.PI / 180);
+        let cameraZ = Math.abs(maxDim / 2 * Math.tan(fov * 2)); 
+        cameraZ *= 2.5; // Zoom out factor (increase to zoom out more)
+        
+        camera.position.set(0, 0, cameraZ);
+        camera.updateProjectionMatrix();
+        controls.target.set(0, 0, 0);
+
+        // 2. SETUP REGIONS & NEURONS
+        brain.traverse((child) => {
+            if (child.isMesh) {
+                regionManager.setup(child);
+                neurons.init(child);
+            }
+        });
+
+        scene.add(brain);
+        document.getElementById('loading').style.display = 'none';
+
+    }, undefined, (err) => console.error(err));
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        neurons.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+</script>
+</body>
+</html>            outline: none;
             cursor: pointer;
         }
         

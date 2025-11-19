@@ -2,23 +2,21 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <!-- Fixes mobile view scaling issues -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Rotten Brain Viewer</title>
+    <title>Neural Brain Viewer</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; }
         canvas { display: block; width: 100%; height: 100%; }
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; font-family: sans-serif; font-size: 1.2rem; pointer-events: none;
+            color: #00ff88; font-family: monospace; font-size: 1.2rem; pointer-events: none; text-align: center;
         }
     </style>
 </head>
 <body>
 
-<div id="loading">Loading Rotten Brain...</div>
+<div id="loading">Initializing Neural Network...</div>
 
-<!-- 1. IMPORT MAP: Fixes "Failed to resolve module specifier" -->
 <script type="importmap">
   {
     "imports": {
@@ -28,77 +26,196 @@
   }
 </script>
 
-<!-- 2. MAIN SCRIPT -->
 <script type="module">
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    // This tool helps us find points ON the brain model
+    import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
-    // Setup Scene
+    // -- SCENE SETUP --
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111); // Dark gray
+    scene.background = new THREE.Color(0x050505); // Very dark for glow contrast
+    scene.fog = new THREE.FogExp2(0x050505, 0.02); // Fade distant objects
 
-    // Setup Camera
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 5);
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0, 4);
 
-    // Setup Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio); // Sharpness for mobile screens
+    renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(renderer.domElement);
 
-    // Setup Controls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.autoRotate = true; // Slowly rotate the brain
+    controls.autoRotateSpeed = 0.5;
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 2); // Bright enough to see details
+    // -- LIGHTING --
+    const ambientLight = new THREE.AmbientLight(0x404040, 2);
     scene.add(ambientLight);
+    
+    // Blue/Green lights for a "sci-fi" medical look
+    const spotLight = new THREE.SpotLight(0x00ff88, 10);
+    spotLight.position.set(5, 5, 5);
+    scene.add(spotLight);
+    
+    const spotLight2 = new THREE.SpotLight(0x0088ff, 10);
+    spotLight2.position.set(-5, 5, -5);
+    scene.add(spotLight2);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 3);
-    dirLight.position.set(5, 10, 7.5);
-    scene.add(dirLight);
-
-    // Load the Model
+    // -- VARIABLES FOR NEURONS --
+    const neuronParticles = []; 
+    const signalSpeed = 0.02;
+    const neuronCount = 200; // How many connection paths to make
+    
+    // -- LOAD MODEL --
     const loader = new GLTFLoader();
-
-    // LOADING YOUR SPECIFIC FILE HERE:
+    
     loader.load('./rotten_brain.glb', function (gltf) {
+        const brain = gltf.scene;
         
-        const model = gltf.scene;
-        
-        // Center the model (fixes issues if the model was exported far from origin)
-        const box = new THREE.Box3().setFromObject(model);
+        // 1. Setup the Main Brain Model
+        brain.traverse((child) => {
+            if (child.isMesh) {
+                // Make the brain slightly transparent so we can see nerves inside/on top
+                child.material.transparent = true;
+                child.material.opacity = 0.8;
+                child.material.color.setHex(0xaaaaaa);
+                child.material.roughness = 0.8;
+            }
+        });
+
+        // Center brain
+        const box = new THREE.Box3().setFromObject(brain);
         const center = box.getCenter(new THREE.Vector3());
-        model.position.sub(center); 
-        
-        scene.add(model);
-        
-        // Remove loading text
+        brain.position.sub(center);
+        scene.add(brain);
+
+        // 2. Generate Neurons on the Surface
+        // We need to find the specific mesh inside the GLB to sample from
+        let brainMesh = null;
+        brain.traverse((child) => {
+            if (child.isMesh && !brainMesh) brainMesh = child;
+        });
+
+        if (brainMesh) {
+            initNeurons(brainMesh);
+        }
+
         document.getElementById('loading').style.display = 'none';
 
-    }, undefined, function (error) {
+    }, undefined, function(error) {
         console.error(error);
-        document.getElementById('loading').innerText = 'Error loading file. Check console.';
-        alert("Could not load ./rotten_brain.glb");
+        document.getElementById('loading').innerText = 'Error loading model';
     });
 
-    // Handle Resize
+    // -- NEURON GENERATION LOGIC --
+    function initNeurons(mesh) {
+        const sampler = new MeshSurfaceSampler(mesh).build();
+        const tempPosition = new THREE.Vector3();
+        
+        // Geometry for the signals (points moving)
+        const signalGeometry = new THREE.BufferGeometry();
+        const signalPositions = new Float32Array(neuronCount * 3);
+        signalGeometry.setAttribute('position', new THREE.BufferAttribute(signalPositions, 3));
+
+        // Material for the signals (glowing dots)
+        const signalMaterial = new THREE.PointsMaterial({
+            color: 0x00ffcc,
+            size: 0.15,
+            transparent: true,
+            opacity: 0.9,
+            blending: THREE.AdditiveBlending, // Makes them glow when overlapping
+            depthWrite: false
+        });
+
+        // Create the paths
+        for (let i = 0; i < neuronCount; i++) {
+            
+            // 1. Pick a random start point
+            sampler.sample(tempPosition);
+            const start = tempPosition.clone();
+
+            // 2. Pick a random end point
+            sampler.sample(tempPosition);
+            const end = tempPosition.clone();
+
+            // 3. Create a curve between them (going slightly up/outwards to look like an arc)
+            // We calculate a "midpoint" that is slightly higher than the surface
+            const mid = start.clone().add(end).multiplyScalar(0.5).normalize().multiplyScalar(start.length() * 1.1);
+            
+            const curve = new THREE.QuadraticBezierCurve3(start, mid, end);
+            
+            // Visual: Draw the faint line (axon)
+            const points = curve.getPoints(20);
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+            const lineMaterial = new THREE.LineBasicMaterial({ 
+                color: 0x0044aa, 
+                transparent: true, 
+                opacity: 0.15 
+            });
+            const line = new THREE.Line(lineGeometry, lineMaterial);
+            mesh.parent.add(line); // Add lines to the brain group
+
+            // Store data for animation
+            neuronParticles.push({
+                curve: curve,
+                progress: Math.random(), // Start at random position along the line
+                speed: 0.005 + Math.random() * 0.01 // Random speeds
+            });
+        }
+
+        // Create the particle system for the moving signals
+        const signals = new THREE.Points(signalGeometry, signalMaterial);
+        mesh.parent.add(signals); // Add to scene
+
+        // Animation function needs access to these variables, so we attach them to the scene
+        scene.userData.signals = signals;
+        scene.userData.particles = neuronParticles;
+    }
+
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // Animation Loop
     function animate() {
         requestAnimationFrame(animate);
         controls.update();
+
+        // -- Animate the Neural Signals --
+        if (scene.userData.signals && scene.userData.particles) {
+            const positions = scene.userData.signals.geometry.attributes.position.array;
+            const particles = scene.userData.particles;
+
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
+                
+                // Move progress forward
+                p.progress += p.speed;
+                
+                // If it reaches the end, reset to start
+                if (p.progress > 1) p.progress = 0;
+
+                // Get the 3D position on the curve at the current progress
+                const point = p.curve.getPoint(p.progress);
+                
+                // Update the buffer array
+                positions[i * 3] = point.x;
+                positions[i * 3 + 1] = point.y;
+                positions[i * 3 + 2] = point.z;
+            }
+            
+            // Tell Three.js the positions have changed
+            scene.userData.signals.geometry.attributes.position.needsUpdate = true;
+        }
+
         renderer.render(scene, camera);
     }
     animate();
-</script>
 
+</script>
 </body>
 </html>

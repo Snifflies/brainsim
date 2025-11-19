@@ -3,38 +3,391 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Atlas - Fixed</title>
+    <title>Brain Atlas - Neural Sim</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
-        /* UI LAYOUT */
+        /* UI OVERLAY */
         #ui-container {
             position: absolute; bottom: 30px; left: 0; width: 100%;
             display: flex; justify-content: center;
             pointer-events: none; z-index: 10;
         }
-
         .control-box {
             background: rgba(20, 20, 20, 0.95);
             padding: 15px; border-radius: 12px; border: 1px solid #333;
             width: 90%; max-width: 350px; pointer-events: auto;
         }
-
         label {
             color: #888; font-size: 0.7rem; font-weight: bold; letter-spacing: 1px;
             margin-bottom: 8px; display: block; text-transform: uppercase;
         }
-
         select {
             width: 100%; padding: 12px; font-size: 16px;
             background: #222; color: white;
             border: 1px solid #555; border-radius: 6px; outline: none;
         }
-
         /* LOADING SCREEN */
         #loading-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: #000; z-index: 999;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            transition: opacity 0.5s ease;
+        }
+        .spinner {
+            width: 40px; height: 40px; border: 4px solid #333;
+            border-top: 4px solid #00ff88; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 15px;
+        }
+        .loading-text { color: #fff; font-family: monospace; letter-spacing: 1px; margin-bottom: 10px;}
+        .error-text { color: #ff4444; font-family: monospace; font-size: 0.8rem; max-width: 80%; text-align: center; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="loading-screen">
+    <div class="spinner"></div>
+    <div class="loading-text" id="status-text">CONNECTING...</div>
+    <div class="error-text" id="error-log"></div>
+</div>
+
+<div id="ui-container">
+    <div class="control-box">
+        <label for="region-select">Highlight Region</label>
+        <select id="region-select">
+            <option value="">Whole Brain (Reset)</option>
+        </select>
+    </div>
+</div>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    // Needed to place neurons on the surface
+    import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
+
+    // --- 1. IZHIKEVICH NEURON MANAGER ---
+    class NeuronManager {
+        constructor(scene, count = 2000) {
+            this.scene = scene;
+            this.count = count;
+            this.points = null;
+            
+            // Izhikevich Parameters (Regular Spiking)
+            this.a = 0.02;
+            this.b = 0.2;
+            this.c = -65.0;
+            this.d = 8.0;
+
+            // Data Arrays (TypedArrays for performance)
+            this.v = new Float32Array(count); // Membrane potential
+            this.u = new Float32Array(count); // Recovery variable
+            this.I = new Float32Array(count); // Input current
+
+            // Initialize random states
+            for(let i=0; i<count; i++) {
+                this.v[i] = -65.0;
+                this.u[i] = this.b * this.v[i];
+                this.I[i] = 0; 
+            }
+        }
+
+        init(frontalMeshes) {
+            if (!frontalMeshes.length) return;
+
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(this.count * 3);
+            const colors = new Float32Array(this.count * 3);
+
+            // Temporary vector for sampling
+            const tempPos = new THREE.Vector3();
+
+            // Distribute neurons among the available frontal meshes
+            let created = 0;
+            let meshIndex = 0;
+
+            while(created < this.count) {
+                // Cycle through frontal meshes
+                const mesh = frontalMeshes[meshIndex % frontalMeshes.length];
+                meshIndex++;
+
+                // Create a sampler for this mesh
+                const sampler = new MeshSurfaceSampler(mesh).build();
+                
+                // Sample a few points per mesh pass
+                for(let k=0; k<5 && created < this.count; k++) {
+                    sampler.sample(tempPos);
+                    
+                    // IMPORTANT: Apply the mesh's world transforms to the point
+                    // Because the brain is inside a wrapper group, we need local coordinates
+                    // effectively, but since we add points to the *brain group*, it should align.
+                    
+                    positions[created * 3] = tempPos.x;
+                    positions[created * 3 + 1] = tempPos.y;
+                    positions[created * 3 + 2] = tempPos.z;
+
+                    // Initial Color (Dark Blue)
+                    colors[created * 3] = 0.1;
+                    colors[created * 3 + 1] = 0.1;
+                    colors[created * 3 + 2] = 0.5;
+                    
+                    created++;
+                }
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 0.15, // Small dots
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            this.points = new THREE.Points(geometry, material);
+            
+            // Add neurons to the same parent group as the brain so they rotate together
+            frontalMeshes[0].parent.add(this.points);
+        }
+
+        update() {
+            if (!this.points) return;
+            
+            const colors = this.points.geometry.attributes.color.array;
+            const dt = 0.5; // Time step (speed of simulation)
+
+            for (let i = 0; i < this.count; i++) {
+                // 1. Random Input Noise (simulating synaptic activity)
+                // We vary it so they don't all fire at once
+                const input = (Math.random() > 0.95) ? 15 : 0; 
+                
+                let v = this.v[i];
+                let u = this.u[i];
+
+                // 2. Izhikevich Integration
+                // v' = 0.04v^2 + 5v + 140 - u + I
+                // u' = a(bv - u)
+                const dv = (0.04 * v * v + 5 * v + 140 - u + input);
+                const du = (this.a * (this.b * v - u));
+
+                v += dv * dt;
+                u += du * dt;
+
+                // 3. Spike Check
+                if (v >= 30.0) {
+                    // Fired!
+                    v = this.c;     // Reset voltage
+                    u += this.d;    // Reset recovery
+                    
+                    // Visual: Flash White/Cyan
+                    colors[i*3] = 0.8;   // R
+                    colors[i*3+1] = 1.0; // G
+                    colors[i*3+2] = 1.0; // B
+                } else {
+                    // Decay color back to dark blue
+                    colors[i*3] *= 0.90;
+                    colors[i*3+1] *= 0.90;
+                    colors[i*3+2] = Math.max(0.3, colors[i*3+2] * 0.95); // Keep blue base
+                }
+
+                this.v[i] = v;
+                this.u[i] = u;
+            }
+
+            this.points.geometry.attributes.color.needsUpdate = true;
+        }
+    }
+
+    // --- 2. CONFIGURATION ---
+    const MAT_BASE = new THREE.MeshLambertMaterial({ color: 0xdddddd });
+    const MAT_ACTIVE = new THREE.MeshLambertMaterial({ color: 0xff0055, emissive: 0x440022, emissiveIntensity: 0.4 });
+    const MAT_GHOST = new THREE.MeshLambertMaterial({ color: 0x222222, transparent: true, opacity: 0.1, depthWrite: false });
+
+    const REGIONS = {
+        "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "cingulate"],
+        "Parietal Lobe":     ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
+        "Temporal Lobe":     ["temporal", "fusiform", "amygdaloid", "hippocampus", "uncus"],
+        "Occipital Lobe":    ["occipital", "cuneus", "lingual"],
+        "Cerebellum":        ["cerebellar", "vermis"],
+        "Brain Stem":        ["medulla", "pons", "midbrain", "colliculus", "peduncle", "olive"],
+        "Thalamus":          ["thalamus", "geniculate", "habenular", "pineal"],
+        "Basal Ganglia":     ["caudate", "putamen", "pallidus", "accumbens", "substantia", "nigra"],
+        "Ventricles":        ["ventricle", "aqueduct"]
+    };
+
+    // --- 3. SCENE SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 25);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.enablePan = false; 
+    controls.minDistance = 5;
+    controls.maxDistance = 60;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.0;
+
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+    scene.add(hemiLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // --- 4. LOADING & MANAGERS ---
+    const neuronSim = new NeuronManager(scene, 2500); // 2500 Neurons
+    const rootGroup = new THREE.Group();
+    scene.add(rootGroup);
+    
+    let allParts = [];
+    let frontalParts = []; // Store frontal meshes for neuron placement
+
+    const loadingScreen = document.getElementById('loading-screen');
+    const statusText = document.getElementById('status-text');
+    const errorText = document.getElementById('error-log');
+
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(dracoLoader);
+
+    statusText.innerText = "DOWNLOADING...";
+
+    loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
+        
+        statusText.innerText = "PROCESSING...";
+        const brain = gltf.scene;
+
+        brain.traverse((child) => {
+            if (child.isMesh) {
+                if (child.material) child.material.dispose();
+                child.material = MAT_BASE;
+                
+                const name = (child.name || "").toLowerCase();
+                child.userData.originalName = name;
+                allParts.push(child);
+
+                // Identify Frontal Lobe Meshes for Neurons
+                const frontalKeywords = REGIONS["Frontal Lobe"];
+                if (frontalKeywords.some(k => name.includes(k))) {
+                    frontalParts.push(child);
+                }
+            }
+        });
+
+        // Center & Scale Logic
+        rootGroup.add(brain);
+        const box = new THREE.Box3().setFromObject(brain);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+
+        brain.position.sub(center);
+
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+            const scaleFactor = 10.0 / maxDim;
+            rootGroup.scale.setScalar(scaleFactor);
+        }
+
+        // INITIALIZE NEURONS
+        if (frontalParts.length > 0) {
+            statusText.innerText = "GROWING NEURONS...";
+            // Small delay to let UI render before heavy processing
+            setTimeout(() => {
+                neuronSim.init(frontalParts);
+                loadingScreen.style.opacity = 0;
+                setTimeout(() => loadingScreen.style.display = 'none', 500);
+            }, 100);
+        } else {
+            loadingScreen.style.opacity = 0;
+            setTimeout(() => loadingScreen.style.display = 'none', 500);
+        }
+
+        camera.position.set(0, 0, 25);
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+    }, (xhr) => {
+        if (xhr.lengthComputable) {
+            const pct = Math.round((xhr.loaded / xhr.total) * 100);
+            statusText.innerText = `DOWNLOADING... ${pct}%`;
+        }
+    }, (err) => {
+        console.error(err);
+        statusText.innerText = "LOAD FAILED";
+        statusText.style.color = "red";
+        errorText.innerText = err.message;
+    });
+
+    // --- 5. UI & ANIMATION ---
+    const selectEl = document.getElementById('region-select');
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key; opt.innerText = key; selectEl.appendChild(opt);
+    });
+
+    selectEl.addEventListener('change', (e) => {
+        const regionName = e.target.value;
+        if (!regionName) {
+            allParts.forEach(p => p.material = MAT_BASE);
+            return;
+        }
+        const keywords = REGIONS[regionName];
+        allParts.forEach(part => {
+            const name = part.userData.originalName;
+            const isMatch = keywords.some(k => name.includes(k));
+            part.material = isMatch ? MAT_ACTIVE : MAT_GHOST;
+        });
+    });
+
+    controls.addEventListener('start', () => { controls.autoRotate = false; });
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        
+        // Update Neuron Simulation
+        neuronSim.update();
+
+        renderer.render(scene, camera);
+    }
+    animate();
+
+</script>
+</body>
+</html>            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background-color: #000; z-index: 999;
             display: flex; flex-direction: column;
             justify-content: center; align-items: center;

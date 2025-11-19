@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Holographic Brain - Wireframe</title>
+    <title>Brain Atlas - High Perf</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
-        /* UI */
         #loading-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background-color: #000; z-index: 999;
@@ -17,24 +16,23 @@
             transition: opacity 0.5s ease;
         }
         .spinner {
-            width: 50px; height: 50px; border: 2px solid #111;
-            border-top: 2px solid #00d8ff; border-radius: 50%;
-            animation: spin 0.8s linear infinite; margin-bottom: 20px;
+            width: 50px; height: 50px; border: 4px solid #222;
+            border-top: 4px solid #0088ff; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
         }
-        #status-text { color: #00d8ff; font-size: 1.2rem; letter-spacing: 2px; text-align: center; }
+        #status-text { color: #0088ff; font-size: 1.2rem; letter-spacing: 2px; }
         
         #ui-container {
             position: absolute; bottom: 40px; left: 0; width: 100%;
             display: flex; justify-content: center; pointer-events: none; z-index: 10;
         }
         select {
-            pointer-events: auto; padding: 15px; background: rgba(10,15,20,0.9);
-            color: #00d8ff; border: 1px solid #005588; border-radius: 8px; font-size: 18px;
+            pointer-events: auto; padding: 12px 20px; background: rgba(20,20,20,1.0);
+            color: #0088ff; border: 1px solid #004477; border-radius: 8px; font-size: 18px;
             text-transform: uppercase; font-weight: bold;
-            box-shadow: 0 0 25px rgba(0, 216, 255, 0.2);
-            min-width: 220px; text-align: center; outline: none;
+            box-shadow: 0 0 15px rgba(0, 136, 255, 0.3);
         }
-        
+
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
@@ -42,7 +40,7 @@
 
 <div id="loading-screen">
     <div class="spinner"></div>
-    <div id="status-text">CONSTRUCTING WIREFRAME...</div>
+    <div id="status-text">SYSTEM INIT...</div>
 </div>
 
 <div id="ui-container">
@@ -66,8 +64,11 @@
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
     // --- CONFIG ---
-    const POINT_COUNT = 60000; // Neurons
-    
+    const STATIC_COUNT = 70000; // Structure dots (Cost: Low)
+    const ACTIVE_COUNT = 2500;  // Firing dots (Cost: Med)
+    const STATIC_SIZE = 0.025;
+    const ACTIVE_SIZE = 0.06;
+
     const REGIONS = {
         "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "cingulate"],
         "Parietal Lobe":     ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
@@ -81,285 +82,218 @@
 
     // --- SCENE ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x020202); 
+    scene.background = new THREE.Color(0x000000);
+    // Fog hides the clipping at the back
+    scene.fog = new THREE.Fog(0x000000, 15, 25); 
 
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 16); 
+    camera.position.set(0, 0, 18); 
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     document.body.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false; 
-    controls.minDistance = 2; controls.maxDistance = 50;
-    controls.autoRotate = true; controls.autoRotateSpeed = 0.3;
+    controls.minDistance = 5; controls.maxDistance = 50;
+    controls.autoRotate = true; controls.autoRotateSpeed = 0.6;
 
-    // --- MANAGER ---
+    // --- LIGHTING ---
+    // Bright directional lights to define the solid shape
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+    
+    const backLight = new THREE.DirectionalLight(0x4444ff, 1.0);
+    backLight.position.set(-10, 5, -10);
+    scene.add(backLight);
+    
+    scene.add(new THREE.AmbientLight(0x404040, 2.0)); // Bright ambient
+
+    // --- STATE ---
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
-
-    // Global State
-    let pointCloud = null;
-    let particleData = []; 
-    let wireframeMeshes = []; // Stores the grid lines
-    let currentActiveRegion = null; 
+    
+    let staticCloud = null;
+    let activeCloud = null;
+    
+    // Arrays for the simulation loop
+    let activeData = []; // { v, u, region }
+    let solidMeshes = []; // Refs to the mesh pieces
+    let currentActiveRegion = null;
 
     // --- MATERIALS ---
-    
-    // 1. Wireframe Base (The Structure)
-    // Faint blue grid lines to show shape
-    const MAT_WIRE_BASE = new THREE.MeshBasicMaterial({
-        color: 0x004466,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.06, // Very faint so it doesn't clutter
+    // 1. The Solid Core (Blocks view of back-side, prevents color mixing)
+    const MAT_SOLID = new THREE.MeshLambertMaterial({ 
+        color: 0x080808, 
+        emissive: 0x000000 
+    });
+    const MAT_SOLID_ACTIVE = new THREE.MeshLambertMaterial({ 
+        color: 0x151515, 
+        emissive: 0x110022 
     });
 
-    // 2. Wireframe Active (The Selection)
-    // Bright Purple grid
-    const MAT_WIRE_ACTIVE = new THREE.MeshBasicMaterial({
-        color: 0xaa00ff,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.15,
+    // 2. Static Structure (Grey Dust)
+    const MAT_STATIC = new THREE.PointsMaterial({
+        size: STATIC_SIZE, color: 0x334455,
+        sizeAttenuation: true, transparent: false
     });
 
-    // 3. Wireframe Dim (Unselected)
-    // Almost invisible
-    const MAT_WIRE_DIM = new THREE.MeshBasicMaterial({
-        color: 0x111111,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.02,
+    // 3. Active Signals (Big Bright Dots)
+    const MAT_ACTIVE = new THREE.PointsMaterial({
+        size: ACTIVE_SIZE, vertexColors: true,
+        transparent: true, opacity: 1.0,
+        depthWrite: false, 
+        blending: THREE.NormalBlending // Prevents flashbang effect
     });
 
-    // --- GENERATORS ---
 
-    function getMeshArea(mesh) {
-        const geom = mesh.geometry;
-        if (geom.index) {
-            const pos = geom.attributes.position;
-            const index = geom.index;
-            let area = 0;
-            const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-            for (let i = 0; i < index.count; i += 3) {
-                a.fromBufferAttribute(pos, index.getX(i));
-                b.fromBufferAttribute(pos, index.getX(i+1));
-                c.fromBufferAttribute(pos, index.getX(i+2));
-                const cross = new THREE.Vector3().crossVectors(b.sub(a), c.sub(a));
-                area += 0.5 * cross.length();
+    // --- BUILDER ---
+    function buildBrain(brainGroup) {
+        
+        // A. SETUP SOLID MESH
+        let meshList = [];
+        let totalArea = 0;
+
+        brainGroup.traverse(c => {
+            if(c.isMesh) {
+                // Make it solid black/grey
+                c.material = MAT_SOLID; 
+                c.userData.originalName = (c.name || "").toLowerCase();
+                solidMeshes.push(c);
+
+                // Area Calc
+                c.updateMatrixWorld();
+                const sphere = c.geometry.boundingSphere || c.geometry.computeBoundingSphere();
+                // Estimate area by volume/radius to save loading time
+                const s = c.scale.x;
+                const area = sphere.radius * s * sphere.radius * s;
+                totalArea += area;
+                meshList.push({ mesh: c, area: area, name: c.userData.originalName });
             }
-            return area;
-        }
-        return 1.0;
-    }
+        });
+        
+        rootGroup.add(brainGroup);
 
-    function buildHologram(brain) {
-        const positions = new Float32Array(POINT_COUNT * 3);
-        const colors = new Float32Array(POINT_COUNT * 3);
+        // B. GENERATE POINTS
+        meshList.sort((a,b) => b.area - a.area);
+
+        // Arrays
+        const sPos = new Float32Array(STATIC_COUNT * 3);
+        const aPos = new Float32Array(ACTIVE_COUNT * 3);
+        const aCol = new Float32Array(ACTIVE_COUNT * 3);
+        
+        let sIdx = 0;
+        let aIdx = 0;
         const tempPos = new THREE.Vector3();
         const tempNorm = new THREE.Vector3();
 
-        let meshData = [];
-        let totalArea = 0;
-
-        brain.traverse(c => {
-            if(c.isMesh) {
-                // 1. CREATE WIREFRAME
-                // Clone the geometry to create the "Cage"
-                const wireMesh = new THREE.Mesh(c.geometry, MAT_WIRE_BASE.clone());
-                wireMesh.applyMatrix4(c.matrixWorld); // Freeze position
-                wireMesh.userData.originalName = (c.name || "").toLowerCase();
-                
-                // Add to scene and list
-                rootGroup.add(wireMesh);
-                wireframeMeshes.push(wireMesh);
-
-                // 2. PREP NEURON DATA
-                c.updateMatrixWorld();
-                const area = getMeshArea(c);
-                const scale = c.scale.x; 
-                totalArea += area * scale * scale;
-                
-                meshData.push({ mesh: c, name: wireMesh.userData.originalName, area: area * scale * scale, count: 0 });
-            }
-        });
-
-        // Distribute Points
-        let allocated = 0;
-        meshData.sort((a,b) => b.area - a.area);
-        
-        for(let m of meshData) {
-            let count = Math.floor((m.area / totalArea) * POINT_COUNT);
-            if(count < 10) count = 10;
-            m.count = count;
-            allocated += count;
-            if(allocated > POINT_COUNT) { m.count -= (allocated - POINT_COUNT); break; }
-        }
-
-        // Generate Points
-        let idx = 0;
-        for(let m of meshData) {
-            const sampler = new MeshSurfaceSampler(m.mesh).build();
-            let regionID = null;
+        for(let item of meshList) {
+            // Calculate Distribution
+            const ratio = item.area / totalArea;
+            const sTarget = Math.ceil(ratio * STATIC_COUNT);
+            const aTarget = Math.ceil(ratio * ACTIVE_COUNT);
             
-            // Check Region
-            for(const [key, keywords] of Object.entries(REGIONS)) {
-                if(keywords.some(w => m.name.includes(w))) { regionID = key; break; }
+            const sampler = new MeshSurfaceSampler(item.mesh).build();
+            
+            // Region Detection
+            let regionID = null;
+            for(const [r, k] of Object.entries(REGIONS)) {
+                if (k.some(w => item.name.includes(w))) { regionID = r; break; }
             }
 
-            for(let i=0; i<m.count; i++) {
-                if(idx >= POINT_COUNT) break;
-
+            // 1. Generate Static Structure (No Animation data needed)
+            for(let i=0; i<sTarget; i++) {
+                if (sIdx >= STATIC_COUNT) break;
                 sampler.sample(tempPos, tempNorm);
-                tempPos.applyMatrix4(m.mesh.matrixWorld);
+                tempPos.addScaledVector(tempNorm, 0.005); // Push out slightly
+                tempPos.applyMatrix4(item.mesh.matrix); // Local transform relative to group
                 
-                // Offset: No longer floating way above, but inside the wireframe cage
-                // tempPos.addScaledVector(tempNorm, 0.0); 
+                sPos[sIdx*3] = tempPos.x;
+                sPos[sIdx*3+1] = tempPos.y;
+                sPos[sIndex*3+2] = tempPos.z;
+                sIdx++;
+            }
 
-                positions[idx*3] = tempPos.x;
-                positions[idx*3+1] = tempPos.y;
-                positions[idx*3+2] = tempPos.z;
+            // 2. Generate Active Agents (Animation data needed)
+            for(let i=0; i<aTarget; i++) {
+                if (aIdx >= ACTIVE_COUNT) break;
+                sampler.sample(tempPos, tempNorm);
+                tempPos.addScaledVector(tempNorm, 0.02); // Float higher than static
+                tempPos.applyMatrix4(item.mesh.matrix);
+                
+                aPos[aIdx*3] = tempPos.x;
+                aPos[aIdx*3+1] = tempPos.y;
+                aPos[aIdx*3+2] = tempPos.z;
 
-                colors[idx*3] = 0.1; colors[idx*3+1] = 0.2; colors[idx*3+2] = 0.3; 
-
-                particleData[idx] = { region: regionID, v: -65 - (Math.random()*20), u: 0 };
-                idx++;
+                // Init Sim Data
+                particleData[aIdx] = {
+                    region: regionID,
+                    v: -65 - Math.random()*20,
+                    u: 0
+                };
+                aIdx++;
             }
         }
 
-        // NORMALIZE AND CENTER ENTIRE GROUP
-        // We measure the wireframe bounds now
-        const finalBox = new THREE.Box3().setFromObject(rootGroup);
-        const center = new THREE.Vector3();
-        finalBox.getCenter(center);
-        const size = new THREE.Vector3();
-        finalBox.getSize(size);
-        
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const scale = 12.0 / maxDim;
+        // Add Static Cloud
+        const sGeo = new THREE.BufferGeometry();
+        sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+        staticCloud = new THREE.Points(sGeo, MAT_STATIC);
+        brainGroup.add(staticCloud);
 
-        // Shift everything to center
-        rootGroup.position.sub(center.multiplyScalar(scale));
-        rootGroup.scale.setScalar(scale);
-
-        // Create Points Object
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-        const mat = new THREE.PointsMaterial({
-            size: 0.05,
-            vertexColors: true,
-            transparent: true,
-            opacity: 1.0,
-            sizeAttenuation: true,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending // Glows against the black background
-        });
-
-        pointCloud = new THREE.Points(geometry, mat);
-        
-        // IMPORTANT: Add points to Root so they scale/move with wireframes
-        // But we need to "undo" the root transform first because points are already in world space
-        // Actually, points were calculated in world space of the original meshes.
-        // Since we are scaling rootGroup, we need points to be relative to rootGroup? 
-        // Easiest: Apply inverse root matrix? 
-        // Simpler: We calculated points based on matrixWorld. If we add them to Scene, they stay put.
-        // If we add them to Root, they get scaled TWICE. 
-        // FIX: Add points to SCENE, but manually apply centering offset.
-        
-        // Let's actually just reset the points to be local to the group logic
-        // Retrospect: Moving the Root Group is easiest. 
-        // The wireframes are children of Root.
-        // We need to add points to Root. But points assume Identity transform.
-        // Since we bake the matrixWorld into the points, they are in "Scene" coordinates.
-        // To put them in "Root" coordinates, we apply the inverse of Root (which is Identity currently).
-        // So just adding them to Root works perfect.
-
-        rootGroup.add(pointCloud);
+        // Add Active Cloud
+        const aGeo = new THREE.BufferGeometry();
+        aGeo.setAttribute('position', new THREE.BufferAttribute(aPos, 3));
+        aGeo.setAttribute('color', new THREE.BufferAttribute(aCol, 3));
+        activeCloud = new THREE.Points(aGeo, MAT_ACTIVE);
+        brainGroup.add(activeCloud);
     }
 
+    // --- SIMULATION (Lightweight Loop) ---
     function updateSimulation() {
-        if (!pointCloud) return;
-        const colors = pointCloud.geometry.attributes.color.array;
-        const dt = 0.8;
+        if (!activeCloud) return;
+        const colors = activeCloud.geometry.attributes.color.array;
+        const dt = 0.9;
 
-        for (let i = 0; i < POINT_COUNT; i++) {
+        for (let i = 0; i < ACTIVE_COUNT; i++) {
             const p = particleData[i];
             if(!p) continue;
 
             const isTarget = (currentActiveRegion && p.region === currentActiveRegion);
             const isWhole = !currentActiveRegion;
-            
-            let fireProb = isTarget ? 0.97 : (isWhole ? 0.995 : 0.9999);
-            const input = (Math.random() > fireProb) ? 30 : 0;
 
+            // Fire Logic
+            let threshold = 0.99;
+            if(isTarget) threshold = 0.96; // High activity
+            if(!isWhole && !isTarget) threshold = 0.9995; // Sleeping
+
+            const input = (Math.random() > threshold) ? 20 : 0;
+            
             p.v += (0.04 * p.v * p.v + 5 * p.v + 140 - p.u + input) * dt;
             p.u += (0.02 * (0.2 * p.v - p.u)) * dt;
 
             if (p.v >= 30.0) {
                 p.v = -65; p.u += 8;
-                colors[i*3] = 0.6; colors[i*3+1] = 0.9; colors[i*3+2] = 1.0; // Cyan Flash
+                // SPIKE COLOR (White/Cyan)
+                colors[i*3] = 0.7; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0; 
             } else {
-                let tr, tg, tb;
-                if(isTarget) { 
-                    tr=0.6; tg=0.0; tb=1.0; // Purple Points for active region
-                } else if (isWhole) { 
-                    tr=0.1; tg=0.2; tb=0.3; // Blue Base
-                } else { 
-                    tr=0.05; tg=0.05; tb=0.05; // Dark
-                }
-
-                colors[i*3] += (tr - colors[i*3]) * 0.15;
-                colors[i*3+1] += (tg - colors[i*3+1]) * 0.15;
-                colors[i*3+2] += (tb - colors[i*3+2]) * 0.15;
+                // DECAY COLOR
+                // If active, base is blue. If inactive, base is invisible (black)
+                let r=0, g=0, b=0;
+                if (isTarget || isWhole) { r=0; g=0.1; b=0.3; } // Resting state
+                
+                // Smooth blend
+                colors[i*3] += (r - colors[i*3]) * 0.15;
+                colors[i*3+1] += (g - colors[i*3+1]) * 0.15;
+                colors[i*3+2] += (b - colors[i*3+2]) * 0.15;
             }
         }
-        pointCloud.geometry.attributes.color.needsUpdate = true;
+        activeCloud.geometry.attributes.color.needsUpdate = true;
     }
 
-    function updateWireframeColors(region) {
-        wireframeMeshes.forEach(mesh => {
-            const name = mesh.userData.originalName;
-            let isActive = false;
-            if (region && REGIONS[region].some(k => name.includes(k))) isActive = true;
-
-            if (isActive) {
-                mesh.material = MAT_WIRE_ACTIVE; // Bright Purple
-            } else if (!region) {
-                mesh.material = MAT_WIRE_BASE; // Default Blue Grid
-            } else {
-                mesh.material = MAT_WIRE_DIM; // Fade out
-            }
-        });
-    }
-
-    // --- LOADER ---
-    const loader = new GLTFLoader();
-    const draco = new DRACOLoader();
-    draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
-    loader.setDRACOLoader(draco);
-
-    const text = document.getElementById('status-text');
-    const spinner = document.getElementById('loading-screen');
-
-    text.innerText = "DOWNLOADING...";
-
-    loader.load('./rotten_brain.glb?v='+Math.random(), (gltf) => {
-        text.innerText = "GENERATING MESH...";
-        
-        setTimeout(() => {
-            buildHologram(gltf.scene);
-            spinner.style.opacity = 0;
-            setTimeout(() => spinner.style.display = 'none', 500);
-        }, 50);
-
-    }, undefined, (e) => { console.error(e); text.innerText = "ERROR"; text.style.color = "red"; });
-
-    // --- UI ---
+    // --- UI & INTERACTION ---
     const select = document.getElementById('region-select');
     for(let r in REGIONS) {
         const o = document.createElement('option');
@@ -368,10 +302,52 @@
 
     select.addEventListener('change', (e) => {
         currentActiveRegion = e.target.value;
-        updateWireframeColors(e.target.value);
+        
+        // Update Solid Mesh Highlighting (Performance cheap)
+        solidMeshes.forEach(m => {
+            let isActive = false;
+            if (currentActiveRegion && REGIONS[currentActiveRegion].some(k => m.userData.originalName.includes(k))) isActive = true;
+            
+            if(isActive) m.material = MAT_SOLID_ACTIVE;
+            else m.material = MAT_SOLID;
+        });
     });
-    
-    controls.addEventListener('start', () => controls.autoRotate = false);
+
+    // --- LOAD ---
+    const text = document.getElementById('status-text');
+    const loader = new GLTFLoader();
+    const draco = new DRACOLoader();
+    draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    loader.setDRACOLoader(draco);
+
+    text.innerText = "DOWNLOADING...";
+
+    loader.load('./rotten_brain.glb?v='+Math.random(), (gltf) => {
+        text.innerText = "ASSEMBLING...";
+        const brain = gltf.scene;
+
+        // Center & Scale (The Wrapper Method)
+        const box = new THREE.Box3().setFromObject(brain);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        brain.position.sub(center); // Centered locally
+        
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if(maxDim > 0) rootGroup.scale.setScalar(12.0 / maxDim); // Universal Scale
+
+        // Process
+        setTimeout(() => {
+            buildBrain(brain);
+            document.getElementById('loading-screen').style.display = 'none';
+        }, 50);
+
+    }, undefined, (e) => {
+        console.error(e);
+        text.innerText = "ERROR";
+        text.style.color = "red";
+    });
+
+    // --- LOOP ---
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth/window.innerHeight;
         camera.updateProjectionMatrix();

@@ -3,19 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Neural Brain Viewer</title>
+    <title>Brain Interaction</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         canvas { display: block; width: 100%; height: 100%; }
+        
+        /* UI Styling */
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+            border: 1px solid #333;
+            width: 80%;
+            max-width: 400px;
+        }
+
+        select {
+            padding: 10px;
+            font-size: 16px;
+            width: 100%;
+            background: #222;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 5px;
+            outline: none;
+        }
+        
+        label { color: white; display: block; margin-bottom: 5px; font-size: 0.9rem; }
+
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: #00ff88; font-family: monospace; font-size: 1.2rem; pointer-events: none;
+            color: #ff0055; font-weight: bold;
         }
     </style>
 </head>
 <body>
 
-<div id="loading">Initializing Neural Network...</div>
+<div id="loading">Loading Brain...</div>
+
+<div id="ui-container">
+    <label for="region-select">Select Brain Region</label>
+    <select id="region-select">
+        <option value="">Whole Brain</option>
+        <!-- Options will be filled by JS -->
+    </select>
+</div>
 
 <script type="importmap">
   {
@@ -31,16 +69,16 @@
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     
-    // IMPORT YOUR NEW NEURON FILE HERE
+    // Custom Modules
     import { NeuronSystem } from './neurons.js';
+    import { BrainRegionManager } from './brainRegions.js';
 
-    // Setup Scene
+    // -- SCENE --
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x050505);
-    scene.fog = new THREE.FogExp2(0x050505, 0.03); // Makes distant dots fade out
+    scene.background = new THREE.Color(0x111111); 
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-    camera.position.set(0, 0, 4.5);
+    camera.position.set(0, 0, 6);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -49,64 +87,79 @@
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.6;
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0x404040, 2);
+    // -- LIGHTING --
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambientLight);
-    const spotLight = new THREE.SpotLight(0x00ffcc, 5);
-    spotLight.position.set(5, 5, 5);
-    scene.add(spotLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+    dirLight.position.set(5, 10, 7.5);
+    scene.add(dirLight);
+    
+    // Backlight for shape definition
+    const backLight = new THREE.DirectionalLight(0xff4444, 1);
+    backLight.position.set(-5, 5, -10);
+    scene.add(backLight);
 
-    // Initialize the Neuron System Class
+    // -- MANAGERS --
     const neurons = new NeuronSystem(scene);
+    const regionManager = new BrainRegionManager();
 
-    // Load Model
+    // -- POPULATE DROPDOWN --
+    const selectEl = document.getElementById('region-select');
+    const regionNames = regionManager.getRegionList();
+    
+    regionNames.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.innerText = name;
+        selectEl.appendChild(option);
+    });
+
+    // Dropdown Event Listener
+    selectEl.addEventListener('change', (e) => {
+        const regionName = e.target.value;
+        regionManager.highlightRegion(regionName);
+    });
+
+    // -- LOAD MODEL --
     const loader = new GLTFLoader();
     loader.load('./rotten_brain.glb', function (gltf) {
         const brain = gltf.scene;
         
-        // Brain styling
+        // Find the mesh and initialize systems
         brain.traverse((child) => {
             if (child.isMesh) {
-                child.material.transparent = true;
-                child.material.opacity = 0.3; // Very faint brain to see neurons better
-                child.material.color.setHex(0x222222);
-                child.material.roughness = 0.9;
-                
-                // Initialize neurons on the first mesh found
-                if (!neurons.pointsSystem) {
-                    neurons.init(child);
-                }
+                // Center the geometry so coordinates work predictably
+                child.geometry.computeBoundingBox();
+                const center = child.geometry.boundingBox.getCenter(new THREE.Vector3());
+                child.geometry.translate(-center.x, -center.y, -center.z);
+
+                // Setup the Regions Manager (Colors)
+                regionManager.setup(child);
+
+                // Setup Neurons (Hidden by default)
+                neurons.init(child);
             }
         });
 
-        // Center object
-        const box = new THREE.Box3().setFromObject(brain);
-        const center = box.getCenter(new THREE.Vector3());
-        brain.position.sub(center);
-        
         scene.add(brain);
         document.getElementById('loading').style.display = 'none';
 
     }, undefined, (err) => console.error(err));
 
-    // Window Resize
+    // -- RESIZE --
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // Animation Loop
+    // -- ANIMATE --
     function animate() {
         requestAnimationFrame(animate);
         controls.update();
-        
-        // Update the neurons every frame
-        neurons.update();
-        
+        neurons.update(); // Still runs logic, but invisible
         renderer.render(scene, camera);
     }
     animate();

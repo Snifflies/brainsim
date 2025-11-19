@@ -3,38 +3,271 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Viewer</title>
+    <title>Allen Brain Atlas Viewer</title>
     <style>
-        /* 1. RESET & BASIC SETUP */
+        /* 1. BASIC RESET */
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         canvas { display: block; width: 100%; height: 100%; outline: none; }
 
-        /* 2. UI CONTAINER (The Dropdown Bar) */
+        /* 2. UI HEADER (Floating Dropdown) */
         #ui-container {
-            position: absolute;
-            top: 0; 
-            left: 0; 
-            width: 100%;
-            padding: 15px 0;
-            background: rgba(15, 15, 15, 0.95); /* Dark solid background */
-            border-bottom: 1px solid #333;
+            position: absolute; top: 0; left: 0; width: 100%;
+            padding: 20px 0;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9), rgba(0,0,0,0));
             z-index: 100;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            display: flex; justify-content: center; pointer-events: none; /* Let clicks pass through empty space */
         }
 
-        /* 3. THE DROPDOWN STYLING */
-        .control-group {
-            display: flex;
-            flex-direction: column;
-            width: 90%;
-            max-width: 400px;
+        .control-group { 
+            width: 90%; max-width: 400px; 
+            pointer-events: auto; /* Re-enable clicks for the dropdown */
         }
 
         label {
-            color: #888;
-            font-size: 0.75rem;
+            color: #aaa; font-size: 0.8rem; font-weight: bold;
+            margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; display: block;
+            text-shadow: 0 2px 4px rgba(0,0,0,1);
+        }
+
+        select {
+            width: 100%; padding: 12px; font-size: 16px;
+            background-color: rgba(30, 30, 30, 0.9); 
+            color: #fff;
+            border: 1px solid #555; border-radius: 8px; 
+            outline: none; cursor: pointer;
+        }
+
+        /* 3. LOADING SCREEN */
+        #loading-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: #000; z-index: 999;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            transition: opacity 0.5s ease;
+        }
+        
+        .spinner {
+            width: 50px; height: 50px;
+            border: 5px solid #333; border-top: 5px solid #ff0055;
+            border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        .loading-text { color: #fff; font-family: monospace; font-size: 1.2rem; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<!-- LOADING OVERLAY -->
+<div id="loading-screen">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading Atlas...</div>
+</div>
+
+<!-- DROPDOWN MENU -->
+<div id="ui-container">
+    <div class="control-group">
+        <label for="region-select">Select Brain Region</label>
+        <select id="region-select">
+            <option value="">Whole Brain (Reset)</option>
+        </select>
+    </div>
+</div>
+
+<!-- IMPORT MAP -->
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<!-- MAIN SCRIPT -->
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ==========================================
+    // 1. CONFIGURATION
+    // ==========================================
+    // Based on the JSON provided, these keywords map to the "Mesh Names"
+    const REGIONS = {
+        "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "anterior_cingulate"],
+        "Parietal Lobe":     ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
+        "Temporal Lobe":     ["temporal", "fusiform", "amygdaloid", "uncus"],
+        "Occipital Lobe":    ["occipital", "cuneus", "lingual"],
+        "Hippocampus":       ["hippocampus", "dentate"],
+        "Cerebellum":        ["cerebellar", "vermis"],
+        "Brain Stem":        ["medulla", "pons", "midbrain", "colliculus", "peduncle", "olive"],
+        "Thalamus":          ["thalamus", "geniculate", "habenular", "pineal"],
+        "Basal Ganglia":     ["caudate", "putamen", "pallidus", "accumbens", "substantia_nigra"],
+        "Ventricles":        ["ventricle", "aqueduct"]
+    };
+
+    const COLORS = {
+        BASE: new THREE.Color(0xe0e0e0),   // Light Grey/White
+        ACTIVE: new THREE.Color(0xff0055), // Hot Pink
+        DIM: new THREE.Color(0x333333)     // Dark Grey (Ghosted)
+    };
+
+    // ==========================================
+    // 2. SCENE SETUP
+    // ==========================================
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050505);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 1000);
+    camera.position.set(0, 5, 15); 
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.0;
+
+    // LIGHTING
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
+
+    const fillLight = new THREE.DirectionalLight(0xaaaaff, 0.8);
+    fillLight.position.set(-10, 0, -10);
+    scene.add(fillLight);
+
+    // ==========================================
+    // 3. REGION MANAGER
+    // ==========================================
+    class BrainRegionManager {
+        constructor() {
+            this.parts = [];
+        }
+
+        setup(model) {
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    // Clone material for independent coloring
+                    child.material = child.material.clone();
+                    child.material.color.copy(COLORS.BASE);
+                    child.material.transparent = true;
+                    child.material.opacity = 1;
+                    child.material.metalness = 0.1;
+                    child.material.roughness = 0.7;
+
+                    // Save lowercase name for searching
+                    child.userData.originalName = child.name.toLowerCase();
+                    this.parts.push(child);
+                }
+            });
+        }
+
+        highlight(regionName) {
+            // Reset to Whole Brain
+            if (!regionName) {
+                this.parts.forEach(p => {
+                    p.material.color.copy(COLORS.BASE);
+                    p.material.opacity = 1;
+                    p.material.emissive.setHex(0x000000);
+                });
+                return;
+            }
+
+            const keywords = REGIONS[regionName];
+            
+            this.parts.forEach(part => {
+                const name = part.userData.originalName;
+                const isMatch = keywords.some(k => name.includes(k));
+
+                if (isMatch) {
+                    part.material.color.copy(COLORS.ACTIVE);
+                    part.material.opacity = 1;
+                    part.material.emissive.setHex(0x220011); // Slight glow
+                } else {
+                    part.material.color.copy(COLORS.DIM);
+                    part.material.opacity = 0.1; // Make non-selected transparent
+                    part.material.emissive.setHex(0x000000);
+                }
+            });
+        }
+    }
+
+    const regionManager = new BrainRegionManager();
+
+    // ==========================================
+    // 4. UI SETUP
+    // ==========================================
+    const select = document.getElementById('region-select');
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.innerText = key;
+        select.appendChild(opt);
+    });
+
+    select.addEventListener('change', (e) => regionManager.highlight(e.target.value));
+
+    // ==========================================
+    // 5. LOAD MODEL
+    // ==========================================
+    const loader = new GLTFLoader();
+    
+    loader.load('./rotten_brain.glb', (gltf) => {
+        const brain = gltf.scene;
+
+        // Center the model
+        const box = new THREE.Box3().setFromObject(brain);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        brain.position.sub(center);
+
+        // Auto-Scale (Ensures it fits on screen regardless of export size)
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 10 / maxDim; 
+        brain.scale.setScalar(scale);
+
+        // Setup Regions
+        regionManager.setup(brain);
+        
+        scene.add(brain);
+
+        // Remove Loading Screen
+        const loadingScreen = document.getElementById('loading-screen');
+        loadingScreen.style.opacity = '0';
+        setTimeout(() => loadingScreen.style.display = 'none', 500);
+
+    }, undefined, (err) => {
+        console.error(err);
+        document.querySelector('.loading-text').innerText = "Error Loading File";
+        document.querySelector('.spinner').style.borderColor = "red";
+    });
+
+    // ==========================================
+    // 6. ANIMATION LOOP
+    // ==========================================
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+</script>
+</body>
+</html>            font-size: 0.75rem;
             font-weight: bold;
             margin-bottom: 5px;
             text-transform: uppercase;

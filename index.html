@@ -2,23 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <!-- Mobile viewport -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rotten Brain 3D Viewer</title>
-
-  <!-- Three.js r128 core -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <!-- GLTFLoader (non‑module, matches r128) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/GLTFLoader.min.js"></script>
-  <!-- OrbitControls (non‑module, matches r128) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/OrbitControls.min.js"></script>
-
   <style>
     html, body {
       margin: 0;
       height: 100%;
       overflow: hidden;
-      background: #0b1120; /* very dark blue */
+      background: #020617;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     canvas {
@@ -30,24 +21,24 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: rgba(15, 23, 42, 0.8);
+      background: rgba(15, 23, 42, 0.85);
       color: #e5e7eb;
       z-index: 10;
-      font-size: 0.95rem;
       text-align: center;
+      font-size: 0.95rem;
     }
     #overlay span {
       padding: 0.75rem 1.5rem;
-      background: rgba(15, 23, 42, 0.9);
+      background: rgba(15, 23, 42, 0.95);
       border-radius: 0.75rem;
-      box-shadow: 0 18px 45px rgba(0,0,0,0.7);
+      box-shadow: 0 20px 45px rgba(0,0,0,0.7);
     }
     #title-bar {
       position: fixed;
       top: 0.75rem;
       left: 50%;
       transform: translateX(-50%);
-      padding: 0.4rem 0.9rem;
+      padding: 0.3rem 0.9rem;
       border-radius: 999px;
       background: rgba(15, 23, 42, 0.9);
       color: #e5e7eb;
@@ -64,23 +55,26 @@
   <div id="overlay"><span>Loading rotten_brain.glb…</span></div>
   <div id="title-bar"><strong>Rotten Brain</strong> • 3D Viewer</div>
 
-  <script>
-    // Path assumes index.html and rotten_brain.glb are in the same folder
-    const MODEL_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BrainStem/glTF-Binary/BrainStem.glb';
+  <!-- ES module script; works on GitHub Pages and modern browsers -->
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.159.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.159.0/examples/jsm/controls/OrbitControls.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.159.0/examples/jsm/loaders/GLTFLoader.js';
+    // Docs recommend jsm/ module imports for GLTFLoader. [web:90][web:109]
+
+    const MODEL_URL = './rotten_brain.glb'; // same folder as index.html
+    const overlay = document.getElementById('overlay');
 
     let scene, camera, renderer, controls, modelRoot;
-    const overlay = document.getElementById('overlay');
 
     init();
     loadModel();
     animate();
 
     function init() {
-      // Scene
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x020617);
 
-      // Camera
       camera = new THREE.PerspectiveCamera(
         50,
         window.innerWidth / window.innerHeight,
@@ -88,7 +82,6 @@
         1000
       );
 
-      // Renderer
       renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.outputEncoding = THREE.sRGBEncoding;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -96,7 +89,6 @@
       document.body.appendChild(renderer.domElement);
       onWindowResize();
 
-      // Lights
       const ambient = new THREE.AmbientLight(0xffffff, 0.6);
       scene.add(ambient);
 
@@ -104,32 +96,37 @@
       keyLight.position.set(4, 6, 8);
       scene.add(keyLight);
 
-      const rimLight = new THREE.DirectionalLight(0x60a5fa, 0.7);
+      const rimLight = new THREE.DirectionalLight(0x60a5fa, 0.6);
       rimLight.position.set(-6, 3, -4);
       scene.add(rimLight);
 
-      // Controls
-      const ControlsClass = THREE.OrbitControls || window.OrbitControls;
-      controls = new ControlsClass(camera, renderer.domElement);
+      controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.05;
       controls.screenSpacePanning = false;
 
       window.addEventListener('resize', onWindowResize, false);
+
+      // Surface JS errors in the overlay too (helps when you’re on mobile)
+      window.addEventListener('error', (e) => {
+        console.error(e.message);
+        overlay.style.display = 'flex';
+        overlay.firstElementChild.innerHTML =
+          'JS error: ' + e.message + '<br><small>Open DevTools console for details.</small>';
+      });
     }
 
     function loadModel() {
       overlay.style.display = 'flex';
       overlay.firstElementChild.textContent = 'Loading rotten_brain.glb…';
 
-      const loader = new THREE.GLTFLoader();
+      const loader = new GLTFLoader();
       loader.load(
         MODEL_URL,
         (gltf) => {
           modelRoot = gltf.scene;
           scene.add(modelRoot);
 
-          // Fit model
           const box = new THREE.Box3().setFromObject(modelRoot);
           const center = box.getCenter(new THREE.Vector3());
           const size = box.getSize(new THREE.Vector3());
@@ -152,7 +149,6 @@
           controls.target.set(0, 0, 0);
           camera.updateProjectionMatrix();
 
-          // Make sure materials render from all angles
           modelRoot.traverse((obj) => {
             if (obj.isMesh && obj.material && obj.material.isMaterial) {
               obj.material.side = THREE.DoubleSide;
@@ -165,15 +161,18 @@
         (xhr) => {
           if (xhr.lengthComputable) {
             const p = Math.round((xhr.loaded / xhr.total) * 100);
-            overlay.firstElementChild.textContent = `Loading rotten_brain.glb… ${p}%`;
+            overlay.firstElementChild.textContent =
+              'Loading rotten_brain.glb… ' + p + '%';
           } else {
-            overlay.firstElementChild.textContent = 'Loading rotten_brain.glb…';
+            overlay.firstElementChild.textContent =
+              'Loading rotten_brain.glb…';
           }
         },
         (error) => {
           console.error('GLB load error:', error);
+          overlay.style.display = 'flex';
           overlay.firstElementChild.innerHTML =
-            'Failed to load rotten_brain.glb.<br><small>Check that index.html and rotten_brain.glb are in the same folder.</small>';
+            'Failed to load rotten_brain.glb.<br><small>Check that index.html and rotten_brain.glb are in the same folder and served by GitHub Pages.</small>';
         }
       );
     }

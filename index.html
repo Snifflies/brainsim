@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Mobile viewport -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rotten Brain 3D Viewer</title>
+
+  <!-- Three.js r128 core -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- GLTFLoader (non‑module, matches r128) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/GLTFLoader.min.js"></script>
+  <!-- OrbitControls (non‑module, matches r128) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/OrbitControls.min.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #0b1120; /* very dark blue */
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 23, 42, 0.8);
+      color: #e5e7eb;
+      z-index: 10;
+      font-size: 0.95rem;
+      text-align: center;
+    }
+    #overlay span {
+      padding: 0.75rem 1.5rem;
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 0.75rem;
+      box-shadow: 0 18px 45px rgba(0,0,0,0.7);
+    }
+    #title-bar {
+      position: fixed;
+      top: 0.75rem;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 0.4rem 0.9rem;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      color: #e5e7eb;
+      font-size: 0.8rem;
+      z-index: 5;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+    }
+    #title-bar strong {
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay"><span>Loading rotten_brain.glb…</span></div>
+  <div id="title-bar"><strong>Rotten Brain</strong> • 3D Viewer</div>
+
+  <script>
+    // Path assumes index.html and rotten_brain.glb are in the same folder
+    const MODEL_URL = './rotten_brain.glb';
+
+    let scene, camera, renderer, controls, modelRoot;
+    const overlay = document.getElementById('overlay');
+
+    init();
+    loadModel();
+    animate();
+
+    function init() {
+      // Scene
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x020617);
+
+      // Camera
+      camera = new THREE.PerspectiveCamera(
+        50,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
+
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      document.body.appendChild(renderer.domElement);
+      onWindowResize();
+
+      // Lights
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambient);
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.4);
+      keyLight.position.set(4, 6, 8);
+      scene.add(keyLight);
+
+      const rimLight = new THREE.DirectionalLight(0x60a5fa, 0.7);
+      rimLight.position.set(-6, 3, -4);
+      scene.add(rimLight);
+
+      // Controls
+      const ControlsClass = THREE.OrbitControls || window.OrbitControls;
+      controls = new ControlsClass(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.screenSpacePanning = false;
+
+      window.addEventListener('resize', onWindowResize, false);
+    }
+
+    function loadModel() {
+      overlay.style.display = 'flex';
+      overlay.firstElementChild.textContent = 'Loading rotten_brain.glb…';
+
+      const loader = new THREE.GLTFLoader();
+      loader.load(
+        MODEL_URL,
+        (gltf) => {
+          modelRoot = gltf.scene;
+          scene.add(modelRoot);
+
+          // Fit model
+          const box = new THREE.Box3().setFromObject(modelRoot);
+          const center = box.getCenter(new THREE.Vector3());
+          const size = box.getSize(new THREE.Vector3());
+
+          modelRoot.position.sub(center);
+
+          const maxDim = Math.max(size.x, size.y, size.z);
+          const targetSize = 4;
+          const scale = targetSize / maxDim;
+          modelRoot.scale.setScalar(scale);
+
+          const scaledBox = new THREE.Box3().setFromObject(modelRoot);
+          const diag = scaledBox.min.distanceTo(scaledBox.max);
+
+          const fov = camera.fov * (Math.PI / 180);
+          const dist = (diag / (2 * Math.tan(fov / 2))) * 1.6;
+
+          camera.position.set(0, diag * 0.15, dist);
+          camera.lookAt(0, 0, 0);
+          controls.target.set(0, 0, 0);
+          camera.updateProjectionMatrix();
+
+          // Make sure materials render from all angles
+          modelRoot.traverse((obj) => {
+            if (obj.isMesh && obj.material && obj.material.isMaterial) {
+              obj.material.side = THREE.DoubleSide;
+              obj.material.needsUpdate = true;
+            }
+          });
+
+          overlay.style.display = 'none';
+        },
+        (xhr) => {
+          if (xhr.lengthComputable) {
+            const p = Math.round((xhr.loaded / xhr.total) * 100);
+            overlay.firstElementChild.textContent = `Loading rotten_brain.glb… ${p}%`;
+          } else {
+            overlay.firstElementChild.textContent = 'Loading rotten_brain.glb…';
+          }
+        },
+        (error) => {
+          console.error('GLB load error:', error);
+          overlay.firstElementChild.innerHTML =
+            'Failed to load rotten_brain.glb.<br><small>Check that index.html and rotten_brain.glb are in the same folder.</small>';
+        }
+      );
+    }
+
+    function onWindowResize() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (controls) controls.update();
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>

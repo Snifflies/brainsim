@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Neural Network</title>
+    <title>Brain Neural Network - 5k</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -61,7 +61,7 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
-    // --- 1. NEURON MANAGER (Corrected Coordinates) ---
+    // --- 1. NEURON MANAGER ---
     class NeuronManager {
         constructor(scene, count) {
             this.scene = scene;
@@ -85,7 +85,6 @@
             
             const tempPos = new THREE.Vector3();
             const tempNormal = new THREE.Vector3();
-            const dummy = new THREE.Object3D(); // Helper for matrix
             
             let created = 0;
             let meshIndex = 0;
@@ -96,19 +95,16 @@
                 
                 const sampler = new MeshSurfaceSampler(mesh).build();
                 
+                // Sample points
                 for(let k=0; k<10 && created < this.count; k++) {
                     sampler.sample(tempPos, tempNormal);
                     
-                    // 1. Tiny Offset (0.002 units) relative to raw mesh size (0.17)
-                    // This pushes them just barely above the skin
+                    // Tiny offset from surface
                     tempPos.addScaledVector(tempNormal, 0.002); 
 
-                    // 2. Apply Local Transform
-                    // This aligns the point with the mesh's position inside the brain group
-                    // WITHOUT applying the massive World Scaling yet.
-                    if (mesh.matrix) {
-                        tempPos.applyMatrix4(mesh.matrix);
-                    }
+                    // No World Matrix application needed here because we add
+                    // the points to the SAME parent group as the mesh.
+                    // They share the coordinate space.
 
                     positions[created*3] = tempPos.x;
                     positions[created*3+1] = tempPos.y;
@@ -124,7 +120,7 @@
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             
             const material = new THREE.PointsMaterial({
-                size: 0.0015, // Very small relative to raw mesh (will be scaled up by parent)
+                size: 0.0015, 
                 vertexColors: true, 
                 transparent: true, 
                 opacity: 1.0,
@@ -134,8 +130,7 @@
 
             this.points = new THREE.Points(geometry, material);
             
-            // IMPORTANT: Add to the same parent as the meshes (the brain group)
-            // This ensures the neurons scale up X60 along with the brain.
+            // Add to the Brain Group (Inherits all centering/scaling)
             frontalMeshes[0].parent.add(this.points);
         }
 
@@ -145,7 +140,8 @@
             const dt = 0.8;
             
             for (let i = 0; i < this.count; i++) {
-                const input = (Math.random() > 0.99) ? 20 : 0; 
+                // Adjusted noise for 5000 neurons (slightly lower prob to prevent total whiteout)
+                const input = (Math.random() > 0.992) ? 20 : 0; 
                 let v = this.v[i]; let u = this.u[i];
                 
                 v += (0.04 * v * v + 5 * v + 140 - u + input) * dt;
@@ -185,6 +181,7 @@
     controls.autoRotate = true; 
     controls.autoRotateSpeed = 0.5;
 
+    // Lights
     scene.add(new THREE.HemisphereLight(0xffffff, 0x111111, 1.2));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
     dirLight.position.set(10, 10, 10);
@@ -211,8 +208,8 @@
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
     
-    // 1500 Neurons requested
-    const neuronSim = new NeuronManager(scene, 1500); 
+    // 5000 Neurons
+    const neuronSim = new NeuronManager(scene, 5000); 
     
     let allParts = [];
     let frontalParts = [];
@@ -288,7 +285,7 @@
     const selectEl = document.getElementById('region-select');
     Object.keys(REGIONS).forEach(key => {
         const opt = document.createElement('option');
-        opt.value = key; opt.innerText = key; selectEl.appendChild(opt);
+        opt.value = key; opt.innerText = key; select.appendChild(opt);
     });
 
     selectEl.addEventListener('change', (e) => {

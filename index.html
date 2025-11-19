@@ -1,15 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Rotten Brain 3D Viewer</title>
-
-  <!-- Three.js r128 core (global THREE) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <!-- GLTFLoader (global THREE.GLTFLoader, same r128 version) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/GLTFLoader.min.js"></script>
-
   <style>
     html, body {
       margin: 0;
@@ -45,20 +39,22 @@
       z-index: 5;
       box-shadow: 0 10px 25px rgba(0,0,0,0.6);
     }
-    #title-bar strong {
-      color: #38bdf8;
-    }
+    #title-bar strong { color: #38bdf8; }
   </style>
 </head>
 <body>
   <div id="overlay"><span>Loading rotten_brain.glb…</span></div>
   <div id="title-bar"><strong>Rotten Brain</strong> • 3D Viewer</div>
 
-  <script>
-    // index.html and rotten_brain.glb must be in the same folder.
-    const MODEL_URL = './rotten_brain.glb';
+  <!-- Single ES‑module script; no other script tags -->
+  <script type="module">
+    import * as THREE from "https://unpkg.com/three@0.159.0/build/three.module.js";
+    import { GLTFLoader } from "https://unpkg.com/three@0.159.0/examples/jsm/loaders/GLTFLoader.js";
 
-    const overlay = document.getElementById('overlay');
+    // index.html and rotten_brain.glb must be in the same folder in your repo.
+    const MODEL_URL = "./rotten_brain.glb";
+
+    const overlay = document.getElementById("overlay");
     let scene, camera, renderer, modelRoot;
 
     init();
@@ -94,17 +90,26 @@
       rimLight.position.set(-6, 3, -4);
       scene.add(rimLight);
 
-      window.addEventListener('resize', onWindowResize, false);
+      window.addEventListener("resize", onWindowResize, false);
+
+      // Surface JS errors in the overlay (handy on mobile)
+      window.addEventListener("error", (e) => {
+        console.error(e.message);
+        overlay.style.display = "flex";
+        overlay.firstElementChild.innerHTML =
+          "JS error: " + e.message +
+          "<br><small>Open DevTools console for full details.</small>";
+      });
     }
 
     function loadModel() {
-      overlay.style.display = 'flex';
-      overlay.firstElementChild.textContent = 'Loading rotten_brain.glb…';
+      overlay.style.display = "flex";
+      overlay.firstElementChild.textContent = "Loading rotten_brain.glb…";
 
-      const loader = new THREE.GLTFLoader();
+      const loader = new GLTFLoader(); // module class, not THREE.GLTFLoader
       loader.load(
         MODEL_URL,
-        function (gltf) {
+        (gltf) => {
           modelRoot = gltf.scene;
           scene.add(modelRoot);
 
@@ -129,31 +134,31 @@
           camera.lookAt(0, 0, 0);
           camera.updateProjectionMatrix();
 
-          modelRoot.traverse(function (obj) {
+          modelRoot.traverse((obj) => {
             if (obj.isMesh && obj.material && obj.material.isMaterial) {
               obj.material.side = THREE.DoubleSide;
               obj.material.needsUpdate = true;
             }
           });
 
-          overlay.style.display = 'none';
+          overlay.style.display = "none";
         },
-        function (xhr) {
+        (xhr) => {
           if (xhr.lengthComputable) {
             const p = Math.round((xhr.loaded / xhr.total) * 100);
             overlay.firstElementChild.textContent =
-              'Loading rotten_brain.glb… ' + p + '%';
+              "Loading rotten_brain.glb… " + p + "%";
           } else {
             overlay.firstElementChild.textContent =
-              'Loading rotten_brain.glb…';
+              "Loading rotten_brain.glb…";
           }
         },
-        function (error) {
-          console.error('GLB load error:', error);
-          overlay.style.display = 'flex';
+        (error) => {
+          console.error("GLB load error:", error);
+          overlay.style.display = "flex";
           overlay.firstElementChild.innerHTML =
-            'Failed to load rotten_brain.glb.' +
-            '<br><small>Check that index.html and rotten_brain.glb are in the same folder and GitHub Pages is serving this branch.</small>';
+            "Failed to load rotten_brain.glb." +
+            "<br><small>Check that index.html and rotten_brain.glb are in the same folder and that GitHub Pages is serving this branch.</small>";
         }
       );
     }

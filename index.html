@@ -3,40 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Atlas - Debug Mode</title>
+    <title>Brain Neural Network - Dense</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
-        canvas { display: block; width: 100%; height: 100%; }
+        canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
-        #info-panel {
-            position: fixed; top: 0; left: 0; width: 100%;
-            padding: 20px; color: #00ff88; pointer-events: none;
-            z-index: 100; text-align: center;
+        #loading-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: #050505; z-index: 999;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
         }
+        .spinner {
+            width: 50px; height: 50px; border: 4px solid #222;
+            border-top: 4px solid #00d8ff; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        #status-text { color: #fff; font-size: 1.1rem; text-align: center; }
         
         #ui-container {
-            position: fixed; bottom: 30px; left: 0; width: 100%;
-            display: flex; justify-content: center; pointer-events: auto; z-index: 10;
+            position: absolute; bottom: 30px; left: 0; width: 100%;
+            display: flex; justify-content: center; pointer-events: none; z-index: 10;
         }
         select {
-            padding: 12px; background: #222; color: white;
-            border: 1px solid #555; border-radius: 6px; font-size: 16px;
+            pointer-events: auto; padding: 12px; background: rgba(10,10,10,0.95);
+            color: #00d8ff; border: 1px solid #333; border-radius: 8px; font-size: 16px;
+            text-transform: uppercase; font-weight: bold;
         }
         
-        /* SPINNER */
-        #loader {
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            width: 50px; height: 50px; border: 5px solid #333;
-            border-top: 5px solid #00ff88; border-radius: 50%;
-            animation: spin 1s infinite linear; z-index: 999;
-        }
-        @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-<div id="loader"></div>
-<div id="info-panel">INITIALIZING...</div>
+<div id="loading-screen">
+    <div class="spinner"></div>
+    <div id="status-text">INITIALIZING...</div>
+</div>
 
 <div id="ui-container">
     <select id="region-select"><option value="">Whole Brain</option></select>
@@ -58,54 +61,23 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
-    const debugText = document.getElementById('info-panel');
-    const loaderSpinner = document.getElementById('loader');
-
-    // --- SCENE ---
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
-
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 30);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    document.body.appendChild(renderer.domElement);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enablePan = false;
-    controls.minDistance = 5;
-    controls.maxDistance = 100;
-
-    // --- LIGHTING ---
-    const ambient = new THREE.AmbientLight(0xffffff, 0.5);
-    scene.add(ambient);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-    dirLight.position.set(10, 10, 10);
-    scene.add(dirLight);
-
-    // --- HELPERS ---
-    // This RED BOX will show us where the brain SHOULD be.
-    // If you see the box but no brain, the brain scale is wrong.
-    const boxHelper = new THREE.BoxHelper(new THREE.Mesh(), 0xff0000);
-    scene.add(boxHelper);
-
-    // --- NEURON CLASS ---
+    // --- 1. NEURON MANAGER ---
     class NeuronManager {
         constructor(scene, count) {
+            this.scene = scene;
             this.count = count;
             this.points = null;
             this.v = new Float32Array(count);
             this.u = new Float32Array(count);
+            
             for(let i=0; i<count; i++) { 
-                this.v[i] = -65 + Math.random()*20; 
-                this.u[i] = 0.2 * this.v[i];
+                this.v[i] = -65.0 + Math.random()*20; 
+                this.u[i] = 0.2 * this.v[i]; 
             }
         }
 
-        init(frontalMeshes, parentObject) {
-            debugText.innerText = `Placing ${this.count} neurons...`;
+        init(frontalMeshes) {
+            if (!frontalMeshes.length) return;
             
             const geometry = new THREE.BufferGeometry();
             const positions = new Float32Array(this.count * 3);
@@ -113,28 +85,37 @@
             
             const tempPos = new THREE.Vector3();
             const tempNormal = new THREE.Vector3();
+            
             let created = 0;
             let meshIndex = 0;
 
             while(created < this.count) {
                 const mesh = frontalMeshes[meshIndex % frontalMeshes.length];
                 meshIndex++;
+                
+                // Ensure matrices are up to date
+                mesh.updateMatrixWorld();
+
                 const sampler = new MeshSurfaceSampler(mesh).build();
                 
+                // Sample more points per mesh to fill the count faster
                 for(let k=0; k<15 && created < this.count; k++) {
                     sampler.sample(tempPos, tempNormal);
                     
-                    // Offset 
-                    tempPos.addScaledVector(tempNormal, 0.005);
+                    // 1. Surface Offset (0.002)
+                    tempPos.addScaledVector(tempNormal, 0.002); 
 
-                    // IMPORTANT: Transform point to match mesh's local space within the brain group
-                    tempPos.applyMatrix4(mesh.matrix);
+                    // 2. Apply Local Transform (Sticks to the specific lobe part)
+                    if (mesh.matrix) {
+                        tempPos.applyMatrix4(mesh.matrix);
+                    }
 
                     positions[created*3] = tempPos.x;
                     positions[created*3+1] = tempPos.y;
                     positions[created*3+2] = tempPos.z;
                     
-                    colors[created*3] = 0.0; colors[created*3+1] = 0.0; colors[created*3+2] = 0.4;
+                    // Dark Blue Base
+                    colors[created*3] = 0.0; colors[created*3+1] = 0.0; colors[created*3+2] = 0.3; 
                     created++;
                 }
             }
@@ -143,32 +124,40 @@
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             
             const material = new THREE.PointsMaterial({
-                size: 0.003, // Tiny because model is tiny
-                vertexColors: true, transparent: true, opacity: 1,
-                blending: THREE.AdditiveBlending, depthWrite: false
+                size: 0.0015, // Keep them sharp and small
+                vertexColors: true, 
+                transparent: true, 
+                opacity: 1.0,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
             });
 
             this.points = new THREE.Points(geometry, material);
-            parentObject.add(this.points); // Attach to Brain Group
+            
+            // Add to brain wrapper so it scales/rotates with the brain
+            frontalMeshes[0].parent.add(this.points);
         }
 
         update() {
             if (!this.points) return;
             const colors = this.points.geometry.attributes.color.array;
-            const dt = 0.5;
+            const dt = 0.8;
             
             for (let i = 0; i < this.count; i++) {
                 const input = (Math.random() > 0.99) ? 20 : 0; 
-                let v = this.v[i], u = this.u[i];
+                let v = this.v[i]; let u = this.u[i];
                 
                 v += (0.04 * v * v + 5 * v + 140 - u + input) * dt;
                 u += (0.02 * (0.2 * v - u)) * dt;
 
                 if (v >= 30.0) { 
                     v = -65.0; u += 8.0;
-                    colors[i*3] = 0.5; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0;
+                    // Flash White/Cyan
+                    colors[i*3] = 0.7; colors[i*3+1] = 1.0; colors[i*3+2] = 1.0;
                 } else { 
-                    colors[i*3] *= 0.9; colors[i*3+1] *= 0.9; colors[i*3+2] = Math.max(0.2, colors[i*3+2]*0.95);
+                    // Decay
+                    colors[i*3] *= 0.9; colors[i*3+1] *= 0.9; 
+                    colors[i*3+2] = Math.max(0.15, colors[i*3+2]*0.95);
                 }
                 this.v[i] = v; this.u[i] = u;
             }
@@ -176,105 +165,145 @@
         }
     }
 
-    // --- MATERIALS & CONFIG ---
-    const MAT_BASE = new THREE.MeshLambertMaterial({ color: 0xdddddd });
-    const MAT_ACTIVE = new THREE.MeshLambertMaterial({ color: 0xff0055, emissive: 0x440022, emissiveIntensity: 0.5 });
-    const MAT_GHOST = new THREE.MeshLambertMaterial({ color: 0x151515 }); // Dark Opaque
+    // --- 2. SCENE & CAMERA ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+    
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(0,0,25);
+    
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enablePan = false; 
+    controls.minDistance = 5; 
+    controls.maxDistance = 60;
+    controls.autoRotate = true; 
+    controls.autoRotateSpeed = 0.5;
+
+    // Lights
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x111111, 1.2));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+
+    // --- 3. CONFIG ---
+    const MAT_BASE = new THREE.MeshLambertMaterial({ color: 0xeeeeee });
+    const MAT_ACTIVE = new THREE.MeshLambertMaterial({ color: 0x00d8ff, emissive: 0x004466, emissiveIntensity: 0.6 });
+    const MAT_GHOST = new THREE.MeshLambertMaterial({ color: 0x111111 });
 
     const REGIONS = {
         "Frontal Lobe": ["frontal", "precentral", "rectus", "orbital", "cingulate"],
-        // ... (Keep list short for brevity, add others as needed)
+        "Parietal Lobe": ["parietal", "postcentral", "precuneus", "supramarginal", "angular"],
+        "Temporal Lobe": ["temporal", "fusiform", "amygdaloid", "hippocampus", "uncus"],
+        "Occipital Lobe": ["occipital", "cuneus", "lingual"],
+        "Cerebellum": ["cerebellar", "vermis"],
+        "Brain Stem": ["medulla", "pons", "midbrain", "colliculus", "peduncle", "olive"],
+        "Thalamus": ["thalamus", "geniculate", "habenular", "pineal"],
+        "Basal Ganglia": ["caudate", "putamen", "pallidus", "accumbens", "substantia", "nigra"],
+        "Ventricles": ["ventricle", "aqueduct"]
     };
-    
-    const neuronSim = new NeuronManager(scene, 5000);
+
+    // --- 4. LOAD ---
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
+    
+    // UPDATED COUNT: 4500 Neurons
+    const neuronSim = new NeuronManager(scene, 4500); 
     
     let allParts = [];
     let frontalParts = [];
 
-    // --- LOAD ---
+    const statusText = document.getElementById('status-text');
+    const loadingScreen = document.getElementById('loading-screen');
+
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    dracoLoader.preload();
+
     const loader = new GLTFLoader();
     loader.setDRACOLoader(dracoLoader);
 
-    debugText.innerText = "DOWNLOADING MODEL...";
+    statusText.innerText = "DOWNLOADING...";
 
     loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
         
+        statusText.innerText = "BUILDING NEURONS...";
         const brain = gltf.scene;
-        
-        // 1. MATERIAL & PART SETUP
+
         brain.traverse((child) => {
             if (child.isMesh) {
-                // Reset transforms to prevent weird offsets
-                // child.position.set(0,0,0); 
-                // ^ DON'T DO THIS for segmented brains, they need their offsets!
-                
-                if(child.material) child.material.dispose();
+                if (child.material) child.material.dispose();
                 child.material = MAT_BASE;
                 child.userData.originalName = (child.name || "").toLowerCase();
                 allParts.push(child);
                 
-                if (child.userData.originalName.includes("frontal") || 
-                    child.userData.originalName.includes("precentral")) {
+                if (REGIONS["Frontal Lobe"].some(k => child.userData.originalName.includes(k))) {
                     frontalParts.push(child);
                 }
             }
         });
 
-        // 2. ADD TO GROUP
-        rootGroup.add(brain);
+        // CREATE WRAPPER
+        const wrapper = new THREE.Group();
+        wrapper.add(brain);
+        rootGroup.add(wrapper);
 
-        // 3. CENTER THE GROUP
-        const box = new THREE.Box3().setFromObject(rootGroup);
+        // CENTER
+        const box = new THREE.Box3().setFromObject(brain);
         const size = new THREE.Vector3(); box.getSize(size);
         const center = new THREE.Vector3(); box.getCenter(center);
-        
-        // Debug info
-        console.log("Model Size:", size);
-        console.log("Model Center:", center);
-        
-        // Shift brain to center
-        brain.position.x = -center.x;
-        brain.position.y = -center.y;
-        brain.position.z = -center.z;
+        brain.position.sub(center);
 
-        // 4. SCALE THE GROUP
+        // SCALE
         const maxDim = Math.max(size.x, size.y, size.z);
-        if (maxDim > 0) {
-            const scale = 10.0 / maxDim;
-            rootGroup.scale.setScalar(scale);
-            debugText.innerText = `Scaled x${scale.toFixed(2)}`;
+        if (maxDim > 0) wrapper.scale.setScalar(10.0 / maxDim);
+
+        // INIT NEURONS
+        if (frontalParts.length > 0) {
+            setTimeout(() => {
+                neuronSim.init(frontalParts);
+                loadingScreen.style.opacity = 0;
+                setTimeout(() => loadingScreen.style.display = 'none', 500);
+            }, 50);
+        } else {
+            loadingScreen.style.display = 'none';
         }
 
-        // 5. UPDATE BOX HELPER (So we can see it)
-        boxHelper.setFromObject(rootGroup);
-        
-        // 6. INIT NEURONS (Attached to 'brain' so they move with it)
-        if(frontalParts.length > 0) {
-            neuronSim.init(frontalParts, brain);
+    }, (xhr) => {
+        if(xhr.lengthComputable) {
+            const pct = Math.round((xhr.loaded / xhr.total) * 100);
+            statusText.innerText = `DOWNLOADING... ${pct}%`;
         }
-
-        loaderSpinner.style.display = 'none';
-        setTimeout(() => debugText.style.display = 'none', 2000);
-
-    }, undefined, (err) => {
-        debugText.innerText = "ERROR: " + err.message;
-        debugText.style.color = "red";
+    }, (err) => {
+        statusText.innerText = "LOAD ERROR";
+        statusText.style.color = "red";
+        console.error(err);
     });
 
-    // --- UI ---
-    // (Simple toggle logic)
+    // --- 5. UI ---
     const selectEl = document.getElementById('region-select');
-    selectEl.addEventListener('change', (e) => {
-        // Simple placeholder logic
-        allParts.forEach(p => p.material = MAT_BASE);
+    Object.keys(REGIONS).forEach(key => {
+        const opt = document.createElement('option');
+        opt.value = key; opt.innerText = key; selectEl.appendChild(opt);
     });
 
+    selectEl.addEventListener('change', (e) => {
+        const val = e.target.value;
+        if(!val) { allParts.forEach(p => p.material = MAT_BASE); return; }
+        const keys = REGIONS[val];
+        allParts.forEach(p => {
+            const match = keys.some(k => p.userData.originalName.includes(k));
+            p.material = match ? MAT_ACTIVE : MAT_GHOST;
+        });
+    });
+
+    controls.addEventListener('start', () => { controls.autoRotate = false; });
     window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth/window.innerHeight;
+        camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });

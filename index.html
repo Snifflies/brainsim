@@ -3,53 +3,47 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Neural Pathways - Fixed</title>
+    <title>Neural Connectome - Final</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
         #loading-screen {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: #020205; z-index: 999;
+            background-color: #020202; z-index: 999;
             display: flex; flex-direction: column;
             justify-content: center; align-items: center;
             transition: opacity 0.5s ease;
         }
-        /* Improved Loading Bar */
-        .load-bar-container {
-            width: 200px; height: 6px; background: #111; border-radius: 3px;
-            margin: 15px 0; overflow: hidden; border: 1px solid #333;
+        .bar-wrap {
+            width: 200px; height: 4px; background: #222; margin-top: 15px; border-radius: 2px;
         }
-        #load-bar { width: 0%; height: 100%; background: #00d8ff; transition: width 0.2s; }
-        
-        #status-text { color: #00d8ff; font-size: 1.2rem; letter-spacing: 2px; }
-        #sub-status { color: #666; font-size: 0.8rem; text-align: center; width: 80%; }
-        
+        #load-bar { width: 0%; height: 100%; background: #0088ff; transition: width 0.1s; }
+        #status-text { color: #0088ff; font-size: 1.2rem; letter-spacing: 2px; }
+
         #ui-container {
             position: absolute; bottom: 40px; left: 0; width: 100%;
             display: flex; justify-content: center; pointer-events: none; z-index: 10;
         }
         select {
-            pointer-events: auto; padding: 12px 25px; background: rgba(10,15,20,0.9);
+            pointer-events: auto; padding: 12px 25px; background: rgba(10,15,20,0.95);
             color: #00d8ff; border: 1px solid #004477; border-radius: 8px; font-size: 16px;
             text-transform: uppercase; font-weight: bold; outline: none;
-            box-shadow: 0 0 20px rgba(0, 200, 255, 0.2);
+            box-shadow: 0 0 20px rgba(0, 136, 255, 0.2);
         }
     </style>
 </head>
 <body>
 
 <div id="loading-screen">
-    <div id="status-text">CONNECTING...</div>
-    <div class="load-bar-container"><div id="load-bar"></div></div>
-    <div id="sub-status">Initializing Neural Core</div>
+    <div id="status-text">INITIALIZING</div>
+    <div class="bar-wrap"><div id="load-bar"></div></div>
 </div>
 
 <div id="ui-container">
     <select id="region-select"><option value="">Whole Brain</option></select>
 </div>
 
-<!-- Import Map with Matching Versions -->
 <script type="importmap">
   {
     "imports": {
@@ -66,65 +60,10 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
-    // --- CONFIGURATION ---
-    const STATIC_COUNT = 120000; 
-    const ACTIVE_COUNT = 5000; 
-    const CONNECTIONS = 2; 
-
-    // --- TEXTURE GEN ---
-    function createGlowTexture() {
-        const canvas = document.createElement('canvas');
-        canvas.width = 32; canvas.height = 32;
-        const ctx = canvas.getContext('2d');
-        const grad = ctx.createRadialGradient(16,16,0, 16,16,16);
-        grad.addColorStop(0, 'rgba(255, 255, 255, 1)'); 
-        grad.addColorStop(0.4, 'rgba(200, 255, 255, 0.3)');
-        grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        ctx.fillStyle = grad; ctx.fillRect(0,0,32,32);
-        return new THREE.CanvasTexture(canvas);
-    }
-    const NEURON_TEX = createGlowTexture();
-
-    // --- SCENE ---
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x010102);
-    // Fog prevents distant artifacting
-    scene.fog = new THREE.Fog(0x010102, 20, 60);
-
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 2, 16);
-    scene.add(camera); // Camera holds light
-
-    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    document.body.appendChild(renderer.domElement);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enablePan = false; 
-    controls.minDistance = 2; controls.maxDistance = 50;
-    controls.autoRotate = true; controls.autoRotateSpeed = 0.5;
-
-    // Lighting
-    const ambient = new THREE.AmbientLight(0x444444, 3.0);
-    scene.add(ambient);
-    const headLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    headLight.position.set(0,0,1);
-    camera.add(headLight);
-    const rimLight = new THREE.DirectionalLight(0x0088ff, 2.0);
-    rimLight.position.set(-10, 5, -10);
-    scene.add(rimLight);
-
-    // --- STATE ---
-    const rootGroup = new THREE.Group();
-    scene.add(rootGroup);
-    let staticCloud, activeCloud, connectionLines;
-    let activeData = [], solidMeshes = [], currentActiveRegion = null;
-    
-    const statusText = document.getElementById('status-text');
-    const subStatus = document.getElementById('sub-status');
-    const loadingScreen = document.getElementById('loading-screen');
-    const loadBar = document.getElementById('load-bar');
+    // --- CONFIG ---
+    const STATIC_COUNT = 100000; // Static Structure dots
+    const ACTIVE_COUNT = 4000;   // Active "Firing" Nodes
+    const CONNECTIONS = 2;       // Beams per node
 
     const REGIONS = {
         "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "cingulate"],
@@ -137,135 +76,193 @@
         "Basal Ganglia":     ["caudate", "putamen", "pallidus", "accumbens", "substantia", "nigra"]
     };
 
-    // --- MATERIALS ---
-    // 1. Solid Core (Dark Matte)
-    const MAT_SOLID = new THREE.MeshLambertMaterial({ 
-        color: 0x151515, 
-        emissive: 0x000000
-    });
+    // --- TEXTURE ---
+    // Create a soft glow sprite programmatically
+    const canvas = document.createElement('canvas');
+    canvas.width = 32; canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(16,16,0, 16,16,16);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.4, 'rgba(100,200,255,0.5)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad; ctx.fillRect(0,0,32,32);
+    const NEURON_TEX = new THREE.CanvasTexture(canvas);
+
+    // --- SCENE ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x010101);
     
-    // 2. Static Dust (Faint)
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 2, 18); // Good view distance
+    scene.add(camera);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enablePan = false; 
+    controls.minDistance = 3; controls.maxDistance = 50;
+    controls.autoRotate = true; controls.autoRotateSpeed = 0.5;
+
+    // --- LIGHTING ---
+    scene.add(new THREE.AmbientLight(0x555555, 1.0));
+    const headLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    headLight.position.set(0,0,1);
+    camera.add(headLight); // Light locked to camera
+    const rimLight = new THREE.DirectionalLight(0x0044ff, 1.5);
+    rimLight.position.set(-10, 0, -5);
+    scene.add(rimLight);
+
+    // --- MASTER GROUP ---
+    // Everything goes in here so it stays synced
+    const mainContainer = new THREE.Group();
+    scene.add(mainContainer);
+
+    let activeCloud, linesMesh;
+    let activeData = []; // Sim data
+    let solidMeshes = [];
+    let currentRegion = null;
+
+    // --- MATERIALS ---
+    const MAT_SOLID = new THREE.MeshLambertMaterial({ color: 0x202020, emissive: 0x000000 });
+    const MAT_SOLID_ACTIVE = new THREE.MeshLambertMaterial({ color: 0x303030, emissive: 0x220044 });
+    
     const MAT_STATIC = new THREE.PointsMaterial({
-        size: 0.04, color: 0x335577, sizeAttenuation: true,
-        transparent: true, opacity: 0.4, map: NEURON_TEX, depthWrite: false
+        size: 0.035, color: 0x335577, transparent: true, opacity: 0.5, 
+        map: NEURON_TEX, depthWrite: false, blending: THREE.AdditiveBlending
     });
 
-    // 3. Active Nodes (Bright)
     const MAT_ACTIVE = new THREE.PointsMaterial({
-        size: 0.1, // Large visible nodes
-        vertexColors: true, map: NEURON_TEX,
-        transparent: true, opacity: 1.0,
-        depthWrite: false, blending: THREE.AdditiveBlending
+        size: 0.08, vertexColors: true, transparent: true, opacity: 1.0, 
+        map: NEURON_TEX, depthWrite: false, blending: THREE.AdditiveBlending
     });
 
-    // 4. Beams (Lines)
     const MAT_LINES = new THREE.LineBasicMaterial({
-        vertexColors: true,
-        transparent: true, opacity: 0.8, // High opacity for visibility
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        vertexColors: true, transparent: true, opacity: 0.4, 
+        blending: THREE.AdditiveBlending, depthWrite: false
     });
 
-    // --- BUILDER ---
-    async function buildBrainAsync(brainGroup) {
+    // --- ASYNC BUILDER ---
+    async function buildNetwork(brain) {
+        const loadBar = document.getElementById('load-bar');
+        const status = document.getElementById('status-text');
+        
+        // 1. PREP SOLID CORE
+        // We create a list of meshes and calculate total area
         let meshList = [];
         let totalArea = 0;
 
-        brainGroup.traverse(c => {
+        brain.traverse(c => {
             if(c.isMesh) {
                 c.material = MAT_SOLID;
                 c.userData.originalName = (c.name || "").toLowerCase();
                 solidMeshes.push(c);
                 
+                // Compute geometry for sampling
                 if(!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
-                const rad = c.geometry.boundingSphere.radius;
-                const s = c.scale.x; 
-                const area = (rad * s) * (rad * s); 
+                const r = c.geometry.boundingSphere.radius;
+                const area = 4 * Math.PI * r * r; // Rough sphere area sufficient for weighting
                 totalArea += area;
                 meshList.push({ mesh: c, area: area, name: c.userData.originalName });
             }
         });
-        rootGroup.add(brainGroup);
+        
+        // Add Solid Brain to Container
+        mainContainer.add(brain);
+        
+        // Sort largest meshes first
         meshList.sort((a,b) => b.area - a.area);
 
-        // Buffers
+        // 2. PREP BUFFERS
         const sPos = new Float32Array(STATIC_COUNT * 3);
         const aPos = new Float32Array(ACTIVE_COUNT * 3);
         const aCol = new Float32Array(ACTIVE_COUNT * 3);
         
-        // Line Buffers
-        const maxLines = ACTIVE_COUNT * CONNECTIONS;
-        const lPos = new Float32Array(maxLines * 6); 
-        const lCol = new Float32Array(maxLines * 6);
+        const lineMax = ACTIVE_COUNT * CONNECTIONS * 2; // *2 for vertices per line
+        const lPos = new Float32Array(lineMax * 3);
+        const lCol = new Float32Array(lineMax * 3);
 
         let sIndex = 0, aIndex = 0, lIndex = 0;
         const tempPos = new THREE.Vector3();
         const tempNorm = new THREE.Vector3();
         
-        statusText.innerText = "WIRING NEURAL NET";
-        const CHUNK_SIZE = 40; 
-
-        for (let i = 0; i < meshList.length; i++) {
+        status.innerText = "MAPPING NEURONS";
+        
+        // 3. GENERATE
+        const CHUNK = 40;
+        for(let i=0; i<meshList.length; i++) {
             const item = meshList[i];
             const ratio = item.area / totalArea;
             
-            // Counts
             let sCount = Math.ceil(ratio * STATIC_COUNT);
             if(sCount < 5) sCount = 5;
             let aCount = Math.ceil(ratio * ACTIVE_COUNT);
             if(aCount < 1) aCount = 1;
 
             const sampler = new MeshSurfaceSampler(item.mesh).build();
-            item.mesh.updateMatrixWorld(); // Vital for positioning
 
-            // Identify Region
+            // Region ID
             let regionID = null;
             for(const [r, k] of Object.entries(REGIONS)) {
                 if (k.some(w => item.name.includes(w))) { regionID = r; break; }
             }
 
-            // 1. Static Cloud
+            // STATIC DOTS
             for(let k=0; k<sCount && sIndex < STATIC_COUNT; k++) {
                 sampler.sample(tempPos, tempNorm);
-                tempPos.addScaledVector(tempNorm, 0.002); // On skin
-                tempPos.applyMatrix4(item.mesh.matrixWorld);
+                tempPos.addScaledVector(tempNorm, 0.002); // Tiny offset
+                
+                // Apply local matrix to put point in same space as mesh
+                // Note: Since we added brain to mainContainer, and we will add points to mainContainer,
+                // we just need the mesh's transform relative to the brain root.
+                // MeshSurfaceSampler samples in local geometry space.
+                // We apply the mesh's matrix to get it into the brain object's space.
+                tempPos.applyMatrix4(item.mesh.matrix); 
+
                 sPos[sIndex*3] = tempPos.x;
                 sPos[sIndex*3+1] = tempPos.y;
                 sPos[sIndex*3+2] = tempPos.z;
                 sIndex++;
             }
 
-            // 2. Active Nodes + Beams
+            // ACTIVE DOTS
             for(let k=0; k<aCount && aIndex < ACTIVE_COUNT; k++) {
                 sampler.sample(tempPos, tempNorm);
-                // IMPORTANT: No Offset. Stick exactly to brain surface.
-                tempPos.applyMatrix4(item.mesh.matrixWorld);
-                
-                const x=tempPos.x, y=tempPos.y, z=tempPos.z;
-                
+                tempPos.addScaledVector(tempNorm, 0.005); // Float slightly higher
+                tempPos.applyMatrix4(item.mesh.matrix);
+
+                const x = tempPos.x, y = tempPos.y, z = tempPos.z;
                 aPos[aIndex*3] = x; aPos[aIndex*3+1] = y; aPos[aIndex*3+2] = z;
-                aCol[aIndex*3] = 0; aCol[aIndex*3+1] = 0; aCol[aIndex*3+2] = 0;
+                
+                // Init Dark
+                aCol[aIndex*3] = 0; aCol[aIndex*3+1] = 0; aCol[aIndex*3+2] = 0.2;
 
                 activeData[aIndex] = { 
                     region: regionID, 
                     v: -65 - Math.random()*30, 
-                    u: 0,
-                    links: [] // Store line indices
+                    u: 0, 
+                    lines: [] // Store which line vertices belong to this node
                 };
                 
-                // Wire to nearby previous nodes (Creates local clusters)
+                // Connect to recent neighbors (Clustering)
                 if(aIndex > 5) {
-                    for(let c=0; c < CONNECTIONS; c++) {
-                        if(lIndex >= maxLines) break;
-                        const target = aIndex - 1 - Math.floor(Math.random()*5); // Link to recent neighbor
+                    for(let c=0; c<CONNECTIONS; c++) {
+                        // Find a neighbor
+                        const target = aIndex - 1 - Math.floor(Math.random()*5);
                         if(target >= 0) {
-                            // Set Line Coords
-                            const lx = lIndex * 6;
-                            lPos[lx] = x; lPos[lx+1] = y; lPos[lx+2] = z;
-                            lPos[lx+3] = aPos[target*3]; lPos[lx+4] = aPos[target*3+1]; lPos[lx+5] = aPos[target*3+2];
+                            const idx = lIndex * 6; // 2 verts, 3 floats each
                             
-                            // Save Link
-                            activeData[aIndex].links.push(lx); 
+                            // Source
+                            lPos[idx] = x; lPos[idx+1] = y; lPos[idx+2] = z;
+                            // Target
+                            lPos[idx+3] = aPos[target*3]; lPos[idx+4] = aPos[target*3+1]; lPos[idx+5] = aPos[target*3+2];
+
+                            // Save reference to Color Indices
+                            // (Source Vert RGB + Target Vert RGB)
+                            activeData[aIndex].lines.push(idx); 
+
                             lIndex++;
                         }
                     }
@@ -273,62 +270,59 @@
                 aIndex++;
             }
 
-            if (i % CHUNK_SIZE === 0) {
-                const p = Math.min((i / meshList.length) * 100, 100);
-                loadBar.style.width = p + "%";
-                subStatus.innerText = `Nodes: ${sIndex + aIndex}`;
+            // Async Break
+            if(i % CHUNK === 0) {
+                loadBar.style.width = Math.round((i/meshList.length)*100) + "%";
                 await new Promise(r => setTimeout(r, 0));
             }
         }
 
-        // GEOMETRY SETUP
-        // 1. Center Calculations
-        let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity, minZ=Infinity, maxZ=-Infinity;
-        for(let i=0; i<sIndex*3; i+=3) {
-            if(sPos[i]<minX) minX=sPos[i]; if(sPos[i]>maxX) maxX=sPos[i];
-            if(sPos[i+1]<minY) minY=sPos[i+1]; if(sPos[i+1]>maxY) maxY=sPos[i+1];
-            if(sPos[i+2]<minZ) minZ=sPos[i+2]; if(sPos[i+2]>maxZ) maxZ=sPos[i+2];
-        }
-        const center = new THREE.Vector3((minX+maxX)/2, (minY+maxY)/2, (minZ+maxZ)/2);
-        const size = Math.max(maxX-minX, maxY-minY, maxZ-minZ);
-        const scale = 13.0 / size;
-
-        // 2. FX Container
-        const fxGroup = new THREE.Group();
-        
+        // 4. CREATE OBJECTS
         const sGeo = new THREE.BufferGeometry();
         sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
-        fxGroup.add(new THREE.Points(sGeo, MAT_STATIC));
+        mainContainer.add(new THREE.Points(sGeo, MAT_STATIC));
 
         const aGeo = new THREE.BufferGeometry();
         aGeo.setAttribute('position', new THREE.BufferAttribute(aPos, 3));
         aGeo.setAttribute('color', new THREE.BufferAttribute(aCol, 3));
         activeCloud = new THREE.Points(aGeo, MAT_ACTIVE);
-        fxGroup.add(activeCloud);
+        mainContainer.add(activeCloud);
 
         const lGeo = new THREE.BufferGeometry();
         lGeo.setAttribute('position', new THREE.BufferAttribute(lPos, 3));
         lGeo.setAttribute('color', new THREE.BufferAttribute(lCol, 3));
-        connectionLines = new THREE.LineSegments(lGeo, MAT_LINES);
-        fxGroup.add(connectionLines);
+        linesMesh = new THREE.LineSegments(lGeo, MAT_LINES);
+        mainContainer.add(linesMesh);
 
-        // 3. Apply Transforms to Groups
-        fxGroup.position.sub(center.multiplyScalar(scale));
-        fxGroup.scale.setScalar(scale);
-        scene.add(fxGroup);
+        // 5. FINALIZE SCALING
+        // Get bounds of the WHOLE CONTAINER (Brain + Points + Lines)
+        const box = new THREE.Box3().setFromObject(mainContainer);
+        const size = new THREE.Vector3(); box.getSize(size);
+        const center = new THREE.Vector3(); box.getCenter(center);
 
-        rootGroup.position.copy(fxGroup.position);
-        rootGroup.scale.copy(fxGroup.scale);
+        // Center logic: Move the CONTAINER content to 0,0,0
+        // Wait, easier to just offset the container position.
+        // Actually, for rotation pivot to work, we want the content centered relative to the Group pivot.
+        // So we translate geometry. But easier: 
+        // Just subtract Center from mainContainer.position.
+        
+        // First, force scale
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scaleFactor = 14.0 / maxDim; // Fit to screen
+        mainContainer.scale.setScalar(scaleFactor);
+        
+        // Now re-center based on the scaled size offset
+        // Just moving the group to -center works visually
+        mainContainer.position.sub(center.multiplyScalar(scaleFactor));
 
-        loadingScreen.style.opacity = 0;
-        setTimeout(() => loadingScreen.style.display = 'none', 500);
+        document.getElementById('loading-screen').style.display = 'none';
     }
 
     function updateSimulation() {
         if (!activeCloud) return;
-        const pCols = activeCloud.geometry.attributes.color.array;
-        const lCols = connectionLines.geometry.attributes.color.array;
-        const dt = 0.9;
+        const pCol = activeCloud.geometry.attributes.color.array;
+        const lCol = linesMesh.geometry.attributes.color.array;
+        const dt = 0.8;
 
         for (let i = 0; i < ACTIVE_COUNT; i++) {
             const p = activeData[i];
@@ -337,95 +331,86 @@
             const isTarget = (currentActiveRegion && p.region === currentActiveRegion);
             const isWhole = !currentActiveRegion;
 
-            // Probability
-            let prob = isTarget ? 0.96 : (isWhole ? 0.99 : 0.9995);
-            const input = (Math.random() > prob) ? 40 : 0;
+            // Sim Input
+            let fireProb = isTarget ? 0.96 : (isWhole ? 0.99 : 0.9999);
+            const input = (Math.random() > fireProb) ? 30 : 0;
 
             p.v += (0.04 * p.v * p.v + 5 * p.v + 140 - p.u + input) * dt;
             p.u += (0.02 * (0.2 * p.v - p.u)) * dt;
 
             if (p.v >= 30.0) {
-                p.v = -65.0; p.u += 8;
-                // FIRE! White Node
-                pCols[i*3] = 1.0; pCols[i*3+1] = 1.0; pCols[i*3+2] = 1.0;
+                p.v = -65; p.u += 8;
+                // SPIKE: Node White
+                pCol[i*3] = 1.0; pCol[i*3+1] = 1.0; pCol[i*3+2] = 1.0;
                 
-                // Beam down lines
-                if(p.links) {
-                    for(let idx of p.links) {
-                        // Gradient Line: White -> Blue
-                        lCols[idx] = 1.0; lCols[idx+1] = 1.0; lCols[idx+2] = 1.0; 
-                        lCols[idx+3] = 0.0; lCols[idx+4] = 0.8; lCols[idx+5] = 1.0; 
+                // Beam: Blue Pulse
+                if(p.lines) {
+                    for(let idx of p.lines) {
+                        // Gradient Vertex colors for line
+                        lCol[idx] = 1.0; lCol[idx+1] = 1.0; lCol[idx+2] = 1.0; 
+                        lCol[idx+3] = 0.0; lCol[idx+4] = 0.8; lCol[idx+5] = 1.0; 
                     }
                 }
-
             } else {
-                // Decay
-                let r=0, g=0, b=0;
-                if(isTarget) { r=0.6; g=0.0; b=0.8; } // Resting Purple (Active)
-                else if (isWhole) { r=0.0; g=0.1; b=0.2; } // Resting Blue
-                else { r=0.02; g=0.02; b=0.02; } // Off
-
-                // Slow node fade
-                pCols[i*3] += (r - pCols[i*3]) * 0.1;
-                pCols[i*3+1] += (g - pColors[i*3+1]) * 0.1;
-                pCols[i*3+2] += (b - pColors[i*3+2]) * 0.1;
+                // DECAY
+                let r=0, g=0, b=0.2;
+                if(isTarget) { r=0.5; g=0.0; b=0.8; } // Active Region Purple
+                else if(isWhole) { r=0.0; g=0.1; b=0.2; } 
                 
-                // Fast line fade (Beam effect)
-                if(p.links) {
-                    for(let idx of p.links) {
-                        lCols[idx] *= 0.8; lCols[idx+1] *= 0.8; lCols[idx+2] *= 0.8;
-                        lCols[idx+3] *= 0.8; lCols[idx+4] *= 0.8; lCols[idx+5] *= 0.8;
+                pCol[i*3] += (r - pCol[i*3]) * 0.15;
+                pCol[i*3+1] += (g - pCol[i*3+1]) * 0.15;
+                pCol[i*3+2] += (b - pCol[i*3+2]) * 0.15;
+
+                // Fade lines fast
+                if(p.lines) {
+                    for(let idx of p.lines) {
+                        lCol[idx] *= 0.85; lCol[idx+1] *= 0.85; lCol[idx+2] *= 0.85;
+                        lCol[idx+3] *= 0.85; lCol[idx+4] *= 0.85; lCol[idx+5] *= 0.85;
                     }
                 }
             }
         }
         activeCloud.geometry.attributes.color.needsUpdate = true;
-        connectionLines.geometry.attributes.color.needsUpdate = true;
+        linesMesh.geometry.attributes.color.needsUpdate = true;
     }
 
     // --- LOADER ---
     const loader = new GLTFLoader();
     const draco = new DRACOLoader();
-    // Standard unpkg path is risky on mobile networks, using gstatic fallback often helps
     draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
     loader.setDRACOLoader(draco);
 
-    statusText.innerText = "CONNECTING TO DATABASE...";
+    const status = document.getElementById('status-text');
+    const loadBar = document.getElementById('load-bar');
+    
+    status.innerText = "DOWNLOADING DATA...";
 
-    // Remove cache buster for speed, add fallback
     loader.load('./rotten_brain.glb', (gltf) => {
-        const brain = gltf.scene;
-        // Rough center
-        const box = new THREE.Box3().setFromObject(brain);
-        const center = box.getCenter(new THREE.Vector3());
-        brain.position.sub(center); 
-        brain.updateMatrixWorld(true); 
-        
-        buildBrainAsync(brain);
-
+        // Immediately start building, no manual center manipulation on mesh needed
+        // we handle that in the builder via Group logic
+        buildNetwork(gltf.scene);
     }, (xhr) => {
         if(xhr.lengthComputable) {
-            const pct = Math.round((xhr.loaded/xhr.total)*100);
-            loadBar.style.width = pct + "%";
-            subStatus.innerText = `Downloaded ${Math.round(xhr.loaded/1024/1024)} MB`;
+            loadBar.style.width = Math.round((xhr.loaded/xhr.total)*100) + "%";
         }
-    }, (err) => {
-        statusText.innerText = "CONNECTION FAILED";
-        statusText.style.color = "red";
-        subStatus.innerText = "Check network / file path";
-        console.error(err);
-    });
+    }, (e) => console.error(e));
 
     // --- UI ---
-    const selectEl = document.getElementById('region-select');
-    Object.keys(REGIONS).forEach(key => {
-        const opt = document.createElement('option');
-        opt.value = key; opt.innerText = key; selectEl.appendChild(opt);
+    const select = document.getElementById('region-select');
+    for(let r in REGIONS) {
+        const o = document.createElement('option');
+        o.value = r; o.innerText = r; select.appendChild(o);
+    }
+    select.addEventListener('change', (e) => { 
+        currentActiveRegion = e.target.value;
+        // Tint solid brain
+        solidMeshes.forEach(m => {
+            let active = currentActiveRegion && REGIONS[currentActiveRegion].some(k => m.userData.originalName.includes(k));
+            m.material = active ? MAT_SOLID_ACTIVE : MAT_SOLID;
+        });
     });
-    selectEl.addEventListener('change', (e) => { currentActiveRegion = e.target.value; });
-    
-    controls.addEventListener('start', () => controls.autoRotate = false);
 
+    controls.addEventListener('start', () => controls.autoRotate = false);
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth/window.innerHeight;
         camera.updateProjectionMatrix();

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Holographic Brain</title>
+    <title>Holographic Brain - High Def</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
         canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -13,23 +13,25 @@
             background-color: #000; z-index: 999;
             display: flex; flex-direction: column;
             justify-content: center; align-items: center;
+            transition: opacity 0.5s ease;
         }
         .spinner {
-            width: 50px; height: 50px; border: 2px solid #111;
-            border-top: 2px solid #00ffff; border-radius: 50%;
+            width: 50px; height: 50px; border: 3px solid #222;
+            border-top: 3px solid #ffaa00; border-radius: 50%;
             animation: spin 0.8s linear infinite; margin-bottom: 20px;
         }
-        #status-text { color: #00ffff; font-size: 1.2rem; letter-spacing: 2px; text-align: center; }
-        #sub-status { color: #444; font-size: 0.8rem; margin-top: 10px; }
+        #status-text { color: #ffaa00; font-size: 1.2rem; letter-spacing: 1px; text-align: center; }
+        #sub-status { color: #666; font-size: 0.9rem; margin-top: 10px; }
         
         #ui-container {
-            position: absolute; bottom: 30px; left: 0; width: 100%;
+            position: absolute; bottom: 40px; left: 0; width: 100%;
             display: flex; justify-content: center; pointer-events: none; z-index: 10;
         }
         select {
-            pointer-events: auto; padding: 12px; background: rgba(0,0,0,0.9);
-            color: #00ffff; border: 1px solid #004444; border-radius: 6px; font-size: 16px;
-            text-transform: uppercase; font-weight: bold; box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
+            pointer-events: auto; padding: 15px; background: rgba(10,10,10,0.9);
+            color: #ffaa00; border: 1px solid #ffaa00; border-radius: 8px; font-size: 18px;
+            text-transform: uppercase; font-weight: bold; box-shadow: 0 0 25px rgba(255, 170, 0, 0.2);
+            min-width: 200px; text-align: center;
         }
         
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -39,8 +41,8 @@
 
 <div id="loading-screen">
     <div class="spinner"></div>
-    <div id="status-text">CONNECTING...</div>
-    <div id="sub-status">Initializing System</div>
+    <div id="status-text">INITIALIZING...</div>
+    <div id="sub-status">Establishing Neural Link</div>
 </div>
 
 <div id="ui-container">
@@ -63,14 +65,9 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
-    // --- UI REFS ---
-    const statusText = document.getElementById('status-text');
-    const subStatus = document.getElementById('sub-status');
-    const loadingScreen = document.getElementById('loading-screen');
-
-    // --- CONFIG ---
-    const POINT_COUNT = 60000; // High resolution point cloud
-    const PARTICLE_SIZE = 0.035; // Size of each "cell"
+    // --- CONFIGURATION ---
+    const POINT_COUNT = 85000; // Higher density for solid look
+    const PARTICLE_SIZE = 0.06; // Larger dots to fill gaps
     
     const REGIONS = {
         "Frontal Lobe":      ["frontal", "precentral", "rectus", "orbital", "cingulate"],
@@ -83,33 +80,39 @@
         "Basal Ganglia":     ["caudate", "putamen", "pallidus", "accumbens", "substantia", "nigra"]
     };
 
-    // --- SCENE SETUP ---
+    // --- SCENE ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x020202); // Deep void
+    scene.background = new THREE.Color(0x000000);
 
+    // Closer Camera to see details immediately
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 25);
+    camera.position.set(0, 0, 16); // Moved closer (was 25)
 
     const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // Cap pixel ratio prevents lag on high-end phones while keeping dots visible
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); 
     document.body.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false; 
-    controls.minDistance = 5; controls.maxDistance = 60;
+    controls.minDistance = 5; controls.maxDistance = 40;
     controls.autoRotate = true; controls.autoRotateSpeed = 0.5;
 
-    // --- NEURAL CLOUD MANAGER ---
+    // --- NEURAL MANAGER ---
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
 
     let pointCloud = null;
-    let particleData = []; // Stores Region Mapping & Neural State
-    let currentActiveRegion = null; // "Frontal Lobe", etc.
+    let particleData = []; 
+    let currentActiveRegion = null; 
+
+    // Loader Refs
+    const statusText = document.getElementById('status-text');
+    const subStatus = document.getElementById('sub-status');
+    const loadingScreen = document.getElementById('loading-screen');
 
     function createPointCloud(brainMesh) {
-        // 1. Setup Arrays
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(POINT_COUNT * 3);
         const colors = new Float32Array(POINT_COUNT * 3);
@@ -117,73 +120,56 @@
         const tempPos = new THREE.Vector3();
         let index = 0;
 
-        // 2. Find all sub-meshes
+        // Find meshes
         let meshes = [];
         brainMesh.traverse(c => {
             if(c.isMesh) {
                 c.updateMatrixWorld();
-                meshes.push({
-                    mesh: c,
-                    name: (c.name || "").toLowerCase(),
-                    weight: 0 // Will determine how many points it gets
-                });
+                meshes.push({ mesh: c, name: (c.name || "").toLowerCase() });
             }
         });
 
-        // 3. Calculate Surface Area (Distribution)
-        // We want more points on bigger parts (like lobes) and fewer on tiny parts
-        let totalArea = 0;
-        const raycaster = new THREE.Raycaster(); // Helper, not used here but good for complex calculation
-        
-        // Rough approximation: just assume equal distribution first to prevent freeze, 
-        // or randomize selection. 
-        // Optimized: Just cycle through meshes randomly until buffer filled.
-        
+        if(meshes.length === 0) {
+            statusText.innerText = "ERROR: NO MESHES";
+            return;
+        }
+
+        // Generate Points
         while (index < POINT_COUNT) {
-            const randMesh = meshes[Math.floor(Math.random() * meshes.length)];
+            const rand = meshes[Math.floor(Math.random() * meshes.length)];
             
-            // Create Sampler on demand (Cached would be better but this saves memory spike)
-            if (!randMesh.sampler) {
-                randMesh.sampler = new MeshSurfaceSampler(randMesh.mesh).build();
+            if (!rand.sampler) {
+                rand.sampler = new MeshSurfaceSampler(rand.mesh).build();
             }
 
-            randMesh.sampler.sample(tempPos);
-            
-            // Apply transform
-            tempPos.applyMatrix4(randMesh.mesh.matrixWorld);
+            rand.sampler.sample(tempPos);
+            tempPos.applyMatrix4(rand.mesh.matrixWorld);
 
-            // Store Position
             positions[index*3] = tempPos.x;
             positions[index*3+1] = tempPos.y;
             positions[index*3+2] = tempPos.z;
 
-            // Initial Color (Ghostly Grey)
-            colors[index*3] = 0.1;
-            colors[index*3+1] = 0.1;
-            colors[index*3+2] = 0.15;
-
-            // Determine Region
-            let regionID = "Other";
+            // Identify Region
+            let regionID = null;
             for(const [rName, keywords] of Object.entries(REGIONS)) {
-                if (keywords.some(k => randMesh.name.includes(k))) {
+                if (keywords.some(k => rand.name.includes(k))) {
                     regionID = rName;
                     break;
                 }
             }
 
-            // Init Neural State
+            // Initialize Data
             particleData[index] = {
                 region: regionID,
-                v: -65.0 + Math.random() * 20, // Voltage
-                u: 0,                          // Recovery
-                fired: false
+                v: -65.0 + Math.random() * 20, // random starting voltage
+                u: 0
             };
             
             index++;
             
-            // Progress Update (Optimization: Don't update DOM every pixel)
-            if (index % 5000 === 0) {
-                // console.log("Generating...", index);
+            // UI Update every 10k points
+            if (index % 10000 === 0) {
+                subStatus.innerText = `Mapping Nodes: ${Math.round((index/POINT_COUNT)*100)}%`;
             }
         }
 
@@ -194,10 +180,10 @@
             size: PARTICLE_SIZE,
             vertexColors: true,
             transparent: true,
-            opacity: 0.8,
+            opacity: 0.9,
             sizeAttenuation: true,
-            depthWrite: false, // Magic setting: makes it look holographic/transparent
-            blending: THREE.AdditiveBlending // Lights add up
+            depthWrite: false,
+            blending: THREE.AdditiveBlending 
         });
 
         pointCloud = new THREE.Points(geometry, material);
@@ -209,120 +195,116 @@
         
         const colors = pointCloud.geometry.attributes.color.array;
         const dt = 0.8;
-        const count = POINT_COUNT;
 
-        for (let i = 0; i < count; i++) {
+        // Pre-calculate colors to save variable creation in loop
+        // Default: Faint Steel Blue
+        const baseR = 0.1, baseG = 0.15, baseB = 0.25;
+        // Highlight: Gold/Orange
+        const activeR = 1.0, activeG = 0.6, activeB = 0.0; 
+        
+        for (let i = 0; i < POINT_COUNT; i++) {
             const p = particleData[i];
             
-            // --- LOGIC: Is this neuron active? ---
-            // 1. If "Whole Brain" is selected, everything has low activity
-            // 2. If a Region is selected, ONLY that region fires aggressively
-            let isActiveRegion = !currentActiveRegion || (p.region === currentActiveRegion);
+            // Determine Status
+            const isTarget = (currentActiveRegion && p.region === currentActiveRegion);
+            const isWholeBrain = !currentActiveRegion;
             
-            // Fire Chance
-            let fireThreshold = isActiveRegion ? 0.985 : 0.999; // Harder to fire if inactive
-            let input = (Math.random() > fireThreshold) ? 15 : 0;
+            // 1. Fire Chance (Sparks)
+            let fireThreshold = 0.995; // Default
+            if (isTarget) fireThreshold = 0.97; // Active area fires lots
+            if (isWholeBrain) fireThreshold = 0.99; // Normal brain fires sometimes
+            if (!isWholeBrain && !isTarget) fireThreshold = 0.9995; // Inactive barely fires
 
-            // Izhikevich Integration
-            // v = 0.04v^2 + 5v + 140 - u + I
+            const input = (Math.random() > fireThreshold) ? 15 : 0;
+
+            // 2. Izhikevich Math
             p.v += (0.04 * p.v * p.v + 5 * p.v + 140 - p.u + input) * dt;
             p.u += (0.02 * (0.2 * p.v - p.u)) * dt;
 
+            // 3. Color Logic
             if (p.v >= 30.0) {
-                // SPIKE!
-                p.v = -65.0;
-                p.u += 8.0;
+                p.v = -65.0; p.u += 8.0;
                 
-                // Flash Color
-                if (isActiveRegion) {
-                    colors[i*3] = 0.2;   // R
-                    colors[i*3+1] = 0.9; // G (Bright Cyan)
-                    colors[i*3+2] = 1.0; // B
-                } else {
-                    colors[i*3] = 0.2;
-                    colors[i*3+1] = 0.2;
-                    colors[i*3+2] = 0.2; // Dull flash
-                }
+                // FLASH!
+                colors[i*3] = 1.0;   // White flash
+                colors[i*3+1] = 1.0;
+                colors[i*3+2] = 1.0;
             } else {
-                // DECAY / FADE
-                const decay = 0.92;
-                
-                // Target Color (Base State)
-                let tr, tg, tb;
-                if (currentActiveRegion) {
-                    if (isActiveRegion) {
-                        tr=0.05; tg=0.15; tb=0.25; // Active region background (Faint Blue)
-                    } else {
-                        tr=0.01; tg=0.01; tb=0.01; // Inactive region (Almost invisible)
-                    }
+                // DECAY
+                let targetR, targetG, targetB;
+
+                if (isTarget) {
+                    // Selected Region -> Orange/Gold Base
+                    targetR = 0.8; targetG = 0.4; targetB = 0.0;
+                } else if (isWholeBrain) {
+                    // Whole Brain -> Visible Steel Blue
+                    targetR = 0.2; targetG = 0.2; targetB = 0.4; 
                 } else {
-                    tr=0.08; tg=0.08; tb=0.1; // Whole brain base
+                    // Dimmed Background -> Very dark Grey
+                    targetR = 0.05; targetG = 0.05; targetB = 0.05;
                 }
 
-                colors[i*3] = colors[i*3] * decay + tr * (1-decay);
-                colors[i*3+1] = colors[i*3+1] * decay + tg * (1-decay);
-                colors[i*3+2] = colors[i*3+2] * decay + tb * (1-decay);
+                // Smooth interpolation
+                colors[i*3] += (targetR - colors[i*3]) * 0.1;
+                colors[i*3+1] += (targetG - colors[i*3+1]) * 0.1;
+                colors[i*3+2] += (targetB - colors[i*3+2]) * 0.1;
             }
         }
         
         pointCloud.geometry.attributes.color.needsUpdate = true;
     }
 
-    // --- LOADING ---
+    // --- LOADER ---
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
     dracoLoader.preload();
     const loader = new GLTFLoader();
     loader.setDRACOLoader(dracoLoader);
 
-    statusText.innerText = "DOWNLOADING...";
+    statusText.innerText = "DOWNLOADING ATLAS...";
 
     loader.load('./rotten_brain.glb?v=' + Math.random(), (gltf) => {
-        statusText.innerText = "SCANNING GEOMETRY...";
         
-        // We load the brain but DO NOT add the mesh to the scene.
-        // We only use it to generate points.
+        statusText.innerText = "PROCESSING...";
         const brain = gltf.scene;
-        
-        // 1. Center Logic First (Calculates offset on the mesh)
-        const box = new THREE.Box3().setFromObject(brain);
-        const center = box.getCenter(new THREE.Vector3());
-        
-        // Apply offset to entire group to center it
-        brain.position.sub(center);
-        brain.updateMatrixWorld(true); // Apply move
 
-        // 2. Determine Scale
+        // Calculate Center/Scale first
+        const box = new THREE.Box3().setFromObject(brain);
         const size = new THREE.Vector3(); box.getSize(size);
+        const center = new THREE.Vector3(); box.getCenter(center);
+        
+        brain.position.sub(center); // Center the geometry data
+
+        // Scale to exactly 10 units
         const maxDim = Math.max(size.x, size.y, size.z);
         let scaleFactor = 10.0 / maxDim;
-        if(!maxDim) scaleFactor = 1;
-
+        if (!maxDim) scaleFactor = 1;
+        
+        // Apply scale to the mesh container group (so samplers see correct size)
+        // Actually, easier to scale rootGroup
         rootGroup.scale.setScalar(scaleFactor);
 
-        // 3. Generate Clouds (Async to let UI update)
+        // Delay for UI redraw
         setTimeout(() => {
             statusText.innerText = "GENERATING NODES...";
-            subStatus.innerText = `Mapping ${POINT_COUNT} neural points...`;
-            
-            // Tiny delay to let text render
             requestAnimationFrame(() => {
                 createPointCloud(brain);
                 
-                // Done
+                // Finish
                 loadingScreen.style.opacity = 0;
                 setTimeout(() => loadingScreen.style.display = 'none', 500);
             });
         }, 100);
 
     }, (xhr) => {
-        if(xhr.lengthComputable) {
+        if (xhr.lengthComputable) {
             const pct = Math.round((xhr.loaded / xhr.total) * 100);
             statusText.innerText = `DOWNLOADING ${pct}%`;
         }
     }, (err) => {
         statusText.innerText = "ERROR";
         statusText.style.color = "red";
+        subStatus.innerText = err.message;
         console.error(err);
     });
 
@@ -338,6 +320,7 @@
     });
     
     controls.addEventListener('start', () => { controls.autoRotate = false; });
+    
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();

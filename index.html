@@ -2,59 +2,80 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!-- Essential for proper mobile rendering -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Brain Interaction</title>
+    <title>Brain Region Viewer</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
-        canvas { display: block; width: 100%; height: 100%; }
+        canvas { display: block; width: 100%; height: 100%; outline: none; }
         
-        /* UI Styling */
+        /* Dropdown UI Container */
         #ui-container {
             position: absolute;
             top: 20px;
             left: 50%;
             transform: translateX(-50%);
             z-index: 10;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 15px;
-            border-radius: 12px;
-            text-align: center;
-            border: 1px solid #333;
             width: 80%;
             max-width: 400px;
+            text-align: center;
+            background: rgba(10, 10, 10, 0.85);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid #333;
+            backdrop-filter: blur(5px);
         }
 
         select {
-            padding: 10px;
-            font-size: 16px;
             width: 100%;
-            background: #222;
-            color: white;
+            padding: 12px;
+            font-size: 16px;
+            background-color: #222;
+            color: #fff;
             border: 1px solid #555;
-            border-radius: 5px;
+            border-radius: 6px;
             outline: none;
+            cursor: pointer;
         }
         
-        label { color: white; display: block; margin-bottom: 5px; font-size: 0.9rem; }
+        label { 
+            color: #aaa; 
+            display: block; 
+            margin-bottom: 8px; 
+            font-size: 0.9rem; 
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
 
+        /* Loading Text */
         #loading {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: #ff0055; font-weight: bold;
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%);
+            color: #ff0055; 
+            font-family: monospace;
+            font-size: 1.5rem;
+            pointer-events: none;
+            font-weight: bold;
         }
     </style>
 </head>
 <body>
 
-<div id="loading">Loading Brain...</div>
+<!-- Loading Screen -->
+<div id="loading">Loading Brain Model...</div>
 
+<!-- UI Controls -->
 <div id="ui-container">
-    <label for="region-select">Select Brain Region</label>
+    <label for="region-select">Highlight Region</label>
     <select id="region-select">
-        <option value="">Whole Brain</option>
-        <!-- Options will be filled by JS -->
+        <option value="">Whole Brain (Default)</option>
     </select>
 </div>
 
+<!-- Import Map (Tells browser where to find Three.js) -->
 <script type="importmap">
   {
     "imports": {
@@ -64,102 +85,123 @@
   }
 </script>
 
+<!-- Main Application Script -->
 <script type="module">
+    // 1. Import Library
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     
-    // Custom Modules
+    // 2. Import Your Custom Files
     import { NeuronSystem } from './neurons.js';
     import { BrainRegionManager } from './brainRegions.js';
 
-    // -- SCENE --
+    // -- SCENE SETUP --
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111); 
+    scene.background = new THREE.Color(0x050505); // Almost black
+    
+    // Fog helps depth perception
+    scene.fog = new THREE.FogExp2(0x050505, 0.02);
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-    camera.position.set(0, 0, 6);
+    camera.position.set(0, 0, 5.5); // Zoom level
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(window.devicePixelRatio); // Sharp on mobile
     document.body.appendChild(renderer.domElement);
 
+    // -- CONTROLS --
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.5;
 
     // -- LIGHTING --
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+    // Ambient light allows us to see the base color (Pink)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); 
     scene.add(ambientLight);
     
-    const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+    // Directional light creates shadows and depth
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(5, 10, 7.5);
     scene.add(dirLight);
     
-    // Backlight for shape definition
-    const backLight = new THREE.DirectionalLight(0xff4444, 1);
-    backLight.position.set(-5, 5, -10);
+    // Red backlight for dramatic effect
+    const backLight = new THREE.DirectionalLight(0xff0055, 0.5);
+    backLight.position.set(-5, 0, -10);
     scene.add(backLight);
 
-    // -- MANAGERS --
+    // -- INITIALIZE SYSTEMS --
     const neurons = new NeuronSystem(scene);
     const regionManager = new BrainRegionManager();
 
-    // -- POPULATE DROPDOWN --
+    // -- POPULATE UI --
+    // Get list of regions from brainRegions.js and put them in the dropdown
     const selectEl = document.getElementById('region-select');
-    const regionNames = regionManager.getRegionList();
+    const regionList = regionManager.getRegionList();
     
-    regionNames.forEach(name => {
+    regionList.forEach(name => {
         const option = document.createElement('option');
         option.value = name;
         option.innerText = name;
         selectEl.appendChild(option);
     });
 
-    // Dropdown Event Listener
+    // Listen for Dropdown Changes
     selectEl.addEventListener('change', (e) => {
-        const regionName = e.target.value;
-        regionManager.highlightRegion(regionName);
+        const selectedRegion = e.target.value;
+        regionManager.highlightRegion(selectedRegion);
     });
 
-    // -- LOAD MODEL --
+    // -- LOAD THE MODEL --
     const loader = new GLTFLoader();
+    
     loader.load('./rotten_brain.glb', function (gltf) {
         const brain = gltf.scene;
         
-        // Find the mesh and initialize systems
+        // 1. Center the model
+        const box = new THREE.Box3().setFromObject(brain);
+        const center = box.getCenter(new THREE.Vector3());
+        brain.position.sub(center); 
+
+        // 2. Process the mesh
         brain.traverse((child) => {
             if (child.isMesh) {
-                // Center the geometry so coordinates work predictably
-                child.geometry.computeBoundingBox();
-                const center = child.geometry.boundingBox.getCenter(new THREE.Vector3());
-                child.geometry.translate(-center.x, -center.y, -center.z);
-
-                // Setup the Regions Manager (Colors)
+                // Setup Region Manager (Enables Vertex Coloring)
                 regionManager.setup(child);
 
-                // Setup Neurons (Hidden by default)
+                // Setup Neurons (Calculates paths, but stays hidden)
                 neurons.init(child);
             }
         });
 
         scene.add(brain);
+        
+        // Hide loading text
         document.getElementById('loading').style.display = 'none';
 
-    }, undefined, (err) => console.error(err));
+    }, undefined, function (error) {
+        console.error(error);
+        document.getElementById('loading').innerText = 'Error: Check console.';
+        document.getElementById('loading').style.color = 'red';
+    });
 
-    // -- RESIZE --
+    // -- HANDLE RESIZE --
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // -- ANIMATE --
+    // -- ANIMATION LOOP --
     function animate() {
         requestAnimationFrame(animate);
+        
         controls.update();
-        neurons.update(); // Still runs logic, but invisible
+        neurons.update(); // Updates neuron logic (even if invisible)
+        
         renderer.render(scene, camera);
     }
     animate();
